@@ -1,5 +1,3 @@
-import * as PIXI from 'pixi.js'
-
 /**
  * 渲染性能治理器（Perf 层）。
  *
@@ -12,21 +10,31 @@ import * as PIXI from 'pixi.js'
  * 实测 FPS 持续低于档位目标 75% 时自动降档；可用 URL ?perf= 强制指定。
  */
 
+import * as PIXI from 'pixi.js'
+
 export type QualityTier = 'high' | 'balanced' | 'saver'
 
 const TIER_FPS: Record<QualityTier, number> = { high: 60, balanced: 30, saver: 20 }
-const TIER_RES: Record<QualityTier, number> = { high: Math.min(window.devicePixelRatio || 1, 2), balanced: 1, saver: 1 }
+const TIER_RES: Record<QualityTier, number> = {
+  high: Math.min(window.devicePixelRatio || 1, 2),
+  balanced: 1,
+  saver: 1,
+}
 /** 降档判定窗口与阈值：实测均值 < 目标 × 0.75 视为带不动 */
 const WINDOW_MS = 4000
 const DOWNGRADE_RATIO = 0.75
+
+export function isMobileDevice() {
+  return window.matchMedia('(pointer: coarse)').matches || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
+}
 
 export function resolveStartTier(): QualityTier {
   const forced = new URLSearchParams(location.search).get('perf')
   if (forced === 'high' || forced === 'balanced' || forced === 'saver') return forced
   const saved = localStorage.getItem('da_perf') as QualityTier | null
   if (saved && saved in TIER_FPS) return saved
-  // 触屏/小屏设备直接从平衡档起步（手机端后续专项，本分支先保桌面端满帧）
-  if (window.matchMedia('(pointer: coarse)').matches) return 'balanced'
+  // 移动端默认平衡档，配合纹理 LOD SD
+  if (isMobileDevice()) return 'balanced'
   return 'high'
 }
 
@@ -35,6 +43,7 @@ export class PerfGovernor {
   private frames = 0
   private windowStart = performance.now()
   private hud: HTMLDivElement | null = null
+  private backgroundPaused = false
 
   constructor(
     private app: PIXI.Application,
@@ -44,14 +53,30 @@ export class PerfGovernor {
     this.applyTier(this.tier)
 
     app.ticker.add(this.onTick, null, PIXI.UPDATE_PRIORITY.LOW)
+    // 页面切后台/前台：暂停渲染，释放 GPU + CPU（切回瞬间避免 deltaTime 尖峰）
+    document.addEventListener('visibilitychange', this.onVisibility)
 
     if (new URLSearchParams(location.search).has('fps')) this.showHud()
-      // 调试探针（控制台可用 __perf 查看当前档位/帧率统计）
-      ; (window as any).__perf = this
+    // 调试探针（控制台可用 __perf 查看当前档位/帧率统计）
+    ;(window as any).__perf = this
   }
 
   get current() {
     return this.tier
+  }
+
+  private onVisibility = () => {
+    if (document.hidden && !this.backgroundPaused) {
+      this.backgroundPaused = true
+      this.app.ticker.remove(this.onTick)
+      this.app.stop()
+    } else if (!document.hidden && this.backgroundPaused) {
+      this.backgroundPaused = false
+      this.frames = 0
+      this.windowStart = performance.now()
+      this.app.ticker.add(this.onTick, null, PIXI.UPDATE_PRIORITY.LOW)
+      this.app.start()
+    }
   }
 
   private applyTier(t: QualityTier) {
@@ -96,6 +121,14 @@ export class PerfGovernor {
   private updateHud(avgFps: number) {
     if (!this.hud) return
     const r = (this.app.renderer as PIXI.Renderer).resolution
-    this.hud.textContent = `${avgFps.toFixed(0)}fps · cap ${TIER_FPS[this.tier]} · res ${r}x · ${this.tier}`
+    const pauseTag = this.backgroundPaused ? ' · paused(back)' : ''
+    this.hud.textContent = `${avgFps.toFixed(0)}fps · cap ${TIER_FPS[this.tier]} · res ${r}x · ${this.tier}${pauseTag}`
+  }
+
+  destroy() {
+    document.removeEventListener('visibilitychange', this.onVisibility)
+    this.app.ticker.remove(this.onTick)
+    this.hud?.remove()
+    this.hud = null
   }
 }

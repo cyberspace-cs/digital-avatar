@@ -113,7 +113,9 @@ export default function App() {
     appRef.current = app
 
     // 自适应帧率治理：60/30/20 三档，掉帧自动降档（?perf= 可强制，?fps=1 看 HUD）
-    new PerfGovernor(app)
+    // tier 同步传给 AvatarSprite.load，用于纹理 LOD（balanced/saver → SD 半图）
+    const governor = new PerfGovernor(app)
+    const tier = governor.current
 
     const meS = new AvatarSprite()
     const partnerS = new AvatarSprite()
@@ -121,8 +123,8 @@ export default function App() {
     partnerSprite.current = partnerS
 
     Promise.all([
-      meS.load(app.stage, MY_MODEL, MODEL_SCALE),
-      partnerS.load(app.stage, PARTNER_MODEL, MODEL_SCALE),
+      meS.load(app.stage, MY_MODEL, MODEL_SCALE, tier),
+      partnerS.load(app.stage, PARTNER_MODEL, MODEL_SCALE, tier),
     ]).then(() => {
       partnerS.model!.visible = false
       meS.setPosition(window.innerWidth * 0.35, window.innerHeight * 0.78)
