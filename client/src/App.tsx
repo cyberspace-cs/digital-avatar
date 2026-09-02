@@ -6,8 +6,10 @@ import { api } from './api'
 import { connectSocket, emit, getSocket } from './socket'
 import type { InteractionEvent, Mood, User, Visibility } from './types'
 
-const MY_MODEL = '/models/hiyori/Hiyori.model3.json'
-const PARTNER_MODEL = '/models/haru/Haru.model3.json'
+// 模型路径需带 base 前缀（生产部署在 /digital-avatar/ 子路径下）
+const BASE = import.meta.env.BASE_URL
+const MY_MODEL = `${BASE}models/hiyori/Hiyori.model3.json`
+const PARTNER_MODEL = `${BASE}models/natori/Natori.model3.json`
 const MODEL_SCALE = 0.12
 
 type MenuPos = { x: number; y: number; target: 'me' | 'partner' } | null
@@ -67,7 +69,7 @@ export default function App() {
       setMe(u)
       if (invite) {
         api.acceptInvite(invite, u.id).then((r) => {
-          setToast(`已与 ${r.partner.name} 绑定！`)
+          setToast(`收到 ${r.partner.name} 送你的数字分身！`)
           location.href = location.origin
         }).catch(() => setToast('邀请链接无效'))
       }
@@ -357,7 +359,7 @@ export default function App() {
               {partnerMood && partnerMood !== 'neutral' && ` · ${MOOD_LABELS[partnerMood]}`}
             </span>
           ) : (
-            <button className="btn ghost" onClick={makeInvite}>邀请 TA 来看我</button>
+            <button className="btn ghost" onClick={makeInvite}>把我的分身送给 TA</button>
           )}
           <button className="btn ghost" onClick={() => setShowMoodPicker(true)}>
             我的状态：{MOOD_LABELS[mood]}
@@ -484,6 +486,11 @@ export default function App() {
 
 function labelOf(action: string) {
   return ACTIONS.find((a) => a.id === action)?.label ?? action
+}
+
+/** SQLite 的 localtime 格式 "YYYY-MM-DD HH:MM:SS" 需转成可解析格式 */
+function parseTime(s: string) {
+  return new Date(s.includes('T') || s.includes('Z') ? s : s.replace(' ', 'T'))
 }
 
 function SayInput({ onSend }: { onSend: (t: string) => void }) {

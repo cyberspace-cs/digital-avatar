@@ -4,7 +4,11 @@ let socket: Socket | null = null
 
 export function connectSocket(userId: string, handlers: Record<string, (...args: any[]) => void>) {
   socket?.disconnect()
-  socket = io('/', { query: { userId } })
+  socket = io('/', {
+    query: { userId },
+    // 生产环境走 nginx 子路径，开发环境直连 vite 代理
+    path: import.meta.env.PROD ? '/digital-avatar/socket.io' : '/socket.io',
+  })
   for (const [evt, fn] of Object.entries(handlers)) {
     socket.on(evt, fn as any)
   }

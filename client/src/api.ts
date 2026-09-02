@@ -1,4 +1,5 @@
-const BASE = ''
+// 生产部署在 nginx 子路径 /digital-avatar/ 下
+const BASE = import.meta.env.PROD ? '/digital-avatar' : ''
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, {
