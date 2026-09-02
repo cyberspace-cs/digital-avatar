@@ -18,6 +18,9 @@
 - 主题切换：v1→v2→v1 双向切换 + localStorage 持久化 ✅
 - 控制台：无功能性报错（仅页面刷新时旧请求中止的正常 ERR_ABORTED 伪影）
 
+### 部署
+- V1.0.2 已上线：https://taoxie.vip/digital-avatar/（dist 同步 + 旧版 dist_old 留存可回滚），线上管理后台 + 主题切换复验通过
+
 ## [V1.0.1] 2026-09-02 23:40
 
 ### 修复
