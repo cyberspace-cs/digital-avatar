@@ -4,6 +4,7 @@ import './pixi-setup'
 import { AvatarSprite } from './live2d/avatar'
 import { api } from './api'
 import { connectSocket, emit, getSocket } from './socket'
+import Admin from './Admin'
 import type { InteractionEvent, Mood, User, Visibility } from './types'
 
 // 模型路径需带 base 前缀（生产部署在 /digital-avatar/ 子路径下）
@@ -36,10 +37,25 @@ const ACTIONS = [
 ]
 
 export default function App() {
+  // 管理后台隐藏入口：仅在 #/admin 时渲染，不出现在用户主界面
+  // （hash 不带页面内变更，刷新后路径一致，hooks 调用顺序稳定）
+  if (location.hash === '#/admin') {
+    return <Admin />
+  }
+
   const canvasHost = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
   const meSprite = useRef<AvatarSprite | null>(null)
   const partnerSprite = useRef<AvatarSprite | null>(null)
+  const [theme, setTheme] = useState<'v1' | 'v2'>(
+    () => (localStorage.getItem('da_theme') as 'v1' | 'v2') ?? 'v1',
+  )
+
+  // 主题切换（v1 初版 / v2 aurora-glass，双主题并存可对比）
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('da_theme', theme)
+  }, [theme])
 
   const [me, setMe] = useState<User | null>(null)
   const [partner, setPartner] = useState<User | null>(null)
@@ -327,6 +343,7 @@ export default function App() {
   if (!me) {
     return (
       <div className="space">
+        <div className="aurora" aria-hidden><span /><span /><span /></div>
         <div ref={canvasHost} className="canvas-host" />
         <div className="onboard">
           <div className="onboard-card">
@@ -341,12 +358,20 @@ export default function App() {
             <button onClick={createIdentity}>创建我的分身</button>
           </div>
         </div>
+        <button
+          className="theme-switch"
+          title="切换 UI 版本"
+          onClick={() => setTheme(theme === 'v1' ? 'v2' : 'v1')}
+        >
+          🎨
+        </button>
       </div>
     )
   }
 
   return (
     <div className="space">
+      <div className="aurora" aria-hidden><span /><span /><span /></div>
       <div ref={canvasHost} className="canvas-host" />
 
       {/* 顶栏 */}
@@ -480,6 +505,15 @@ export default function App() {
       ))}
 
       {toast && <div className="toast">{toast}</div>}
+
+      {/* UI 版本对比切换（v1 初版 / v2 aurora-glass） */}
+      <button
+        className="theme-switch"
+        title="切换 UI 版本"
+        onClick={() => setTheme(theme === 'v1' ? 'v2' : 'v1')}
+      >
+        🎨
+      </button>
     </div>
   )
 }
