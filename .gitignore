@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.db
+*.db-wal
+*.db-shm
+client/public/live2d/live2dcubismcore.min.js
+.DS_Store
+*.log
