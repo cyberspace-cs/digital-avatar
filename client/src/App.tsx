@@ -287,17 +287,34 @@ export default function App() {
       interaction: handleIncoming,
       partner_online: (online: boolean) => setPartnerOnline(online),
       state_update: (s: any) => {
-        // 只在对方公开状态时展示
+        // 只在对方公开状态时展示；对方分身表情同步变化
         if (s.visibility === 'public') {
           setPartnerMood(s.mood)
+          partnerSprite.current?.setMood(s.mood)
+        } else {
+          setPartnerMood(null)
+          partnerSprite.current?.setMood('neutral')
         }
       },
     })
-    api.getPartner(me.id).then((r) => r.partner && setPartner(r.partner))
+    api.getPartner(me.id).then(async (r) => {
+      if (!r.partner) return
+      setPartner(r.partner)
+      // 拉取对方持久化状态（TA 离线期间改的状态也能看到）
+      try {
+        const st = await api.getState(r.partner.id)
+        if (st.state && st.state.visibility === 'public') {
+          setPartnerMood(st.state.mood)
+          partnerSprite.current?.setMood(st.state.mood)
+        }
+      } catch (_e) { /* 忽略，避免阻塞 */ }
+    })
     api.getState(me.id).then((r) => {
       if (r.state) {
         setMood(r.state.mood)
         setVisibility(r.state.visibility)
+        // 刷新后自己的分身也恢复到当前状态的表现
+        meSprite.current?.setMood(r.state.mood)
       }
     })
     api.getEvents(me.id).then((r) => setEvents(r.events))

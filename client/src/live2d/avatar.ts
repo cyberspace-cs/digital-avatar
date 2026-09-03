@@ -91,6 +91,58 @@ const MOOD_RULES: Record<Mood, { expression?: string; speed: number }> = {
   angry: { expression: 'Angry', speed: 1.1 },
 }
 
+/**
+ * 心情 → Cubism 标准参数覆盖层（State 层）。
+ *
+ * 不依赖 .exp3.json 表情文件（Hiyori 没有），直接驱动 Cubism4 通用标准参数，
+ * 对所有模型生效。挂载在 internalModel 的 'beforeModelUpdate' 事件上：
+ * 位于 动作/表情/物理 之后、coreModel.update() 之前，且被 saveParameters/loadParameters
+ * 包裹 → 逐帧覆盖、不污染下一帧的动作基准。
+ *
+ * mode:
+ *  - 'abs'：形状类参数（嘴形/眉毛/头角度），绝对覆盖
+ *  - 'mul'：开合度类参数（睁眼），乘算——眨眼动画先写 EyeLOpen，乘算保留眨眼
+ */
+const MOOD_PARAMS: Record<Mood, Array<{ id: string; v: number; mode: 'abs' | 'mul' }>> = {
+  neutral: [],
+  happy: [
+    { id: 'ParamMouthForm', v: 1, mode: 'abs' }, // 嘴角上扬
+    { id: 'ParamEyeLSmile', v: 0.7, mode: 'abs' }, // 笑眼弯弯
+    { id: 'ParamEyeRSmile', v: 0.7, mode: 'abs' },
+    { id: 'ParamBrowLY', v: 0.25, mode: 'abs' }, // 眉毛微挑
+    { id: 'ParamBrowRY', v: 0.25, mode: 'abs' },
+  ],
+  low: [
+    { id: 'ParamMouthForm', v: -0.8, mode: 'abs' }, // 嘴角下垂
+    { id: 'ParamBrowLForm', v: -1, mode: 'abs' }, // 困扰眉
+    { id: 'ParamBrowRForm', v: -1, mode: 'abs' },
+    { id: 'ParamEyeLOpen', v: 0.72, mode: 'mul' }, // 眼神黯淡
+    { id: 'ParamEyeROpen', v: 0.72, mode: 'mul' },
+    { id: 'ParamEyeBallY', v: -0.6, mode: 'abs' }, // 视线向下
+    { id: 'ParamAngleY', v: -10, mode: 'abs' }, // 微微低头
+  ],
+  tired: [
+    { id: 'ParamEyeLOpen', v: 0.45, mode: 'mul' }, // 半睁眼
+    { id: 'ParamEyeROpen', v: 0.45, mode: 'mul' },
+    { id: 'ParamMouthForm', v: -0.3, mode: 'abs' },
+    { id: 'ParamBrowLY', v: -0.25, mode: 'abs' },
+    { id: 'ParamBrowRY', v: -0.25, mode: 'abs' },
+    { id: 'ParamAngleY', v: -6, mode: 'abs' },
+  ],
+  angry: [
+    { id: 'ParamBrowLForm', v: 1, mode: 'abs' }, // 怒眉
+    { id: 'ParamBrowRForm', v: 1, mode: 'abs' },
+    { id: 'ParamBrowLY', v: -0.5, mode: 'abs' }, // 眉毛压低
+    { id: 'ParamBrowRY', v: -0.5, mode: 'abs' },
+    { id: 'ParamMouthForm', v: -0.8, mode: 'abs' },
+    { id: 'ParamEyeLOpen', v: 0.85, mode: 'mul' },
+    { id: 'ParamEyeROpen', v: 0.85, mode: 'mul' },
+  ],
+}
+
+/** 参数平滑过渡时间常数（ms）：切心情时约 0.3s 内自然过渡，不跳变 */
+const MOOD_PARAM_TAU = 120
+
 export class AvatarSprite {
   model: Live2DModel | null = null
   home = { x: 0, y: 0 }
@@ -100,6 +152,11 @@ export class AvatarSprite {
   private _returning = false
   private _worker: Worker | null = null
   private _blobUrls: string[] = []
+  /** 心情参数平滑状态：idx → {mode, cur}（abs 当前值 / mul 当前系数） */
+  private _moodCur = new Map<number, { mode: 'abs' | 'mul'; cur: number }>()
+  /** 按模型解析好的心情参数（跳过模型不存在的参数） */
+  private _moodDefs = new Map<Mood, Array<{ idx: number; v: number; mode: 'abs' | 'mul' }>>()
+  private _moodLastTs = 0
 
   async load(container: PIXI.Container, url: string, scale: number, tier: QualityTier = 'high') {
     await installResolveUrlMiddleware()
@@ -169,7 +226,68 @@ export class AvatarSprite {
     this.model.anchor.set(0.5, 0.5)
     this.model.interactive = true
     container.addChild(this.model)
+    this._setupMoodParamDriver()
     return this.model
+  }
+
+  /** 把 MOOD_PARAMS 解析成参数下标（跳过模型不存在的参数），挂 beforeModelUpdate 驱动 */
+  private _setupMoodParamDriver() {
+    const internal = (this.model as any)?.internalModel as any
+    const core = internal?.coreModel
+    if (!core?.setParameterValueByIndex || typeof internal.on !== 'function') return
+    const count = core.getParameterCount()
+    for (const [mood, defs] of Object.entries(MOOD_PARAMS) as [
+      Mood,
+      (typeof MOOD_PARAMS)[Mood],
+    ][]) {
+      this._moodDefs.set(
+        mood,
+        defs
+          .map((d) => ({ ...d, idx: core.getParameterIndex(d.id) as number }))
+          .filter((d) => d.idx >= 0 && d.idx < count),
+      )
+    }
+    this._moodLastTs = performance.now()
+    internal.on('beforeModelUpdate', this._applyMoodParams)
+  }
+
+  /** 每帧在 coreModel.update 前覆盖心情参数；向目标值指数平滑，切心情不跳变 */
+  private _applyMoodParams = () => {
+    const core = (this.model as any)?.internalModel?.coreModel
+    if (!core) return
+    const now = performance.now()
+    const dt = Math.min(250, now - this._moodLastTs)
+    this._moodLastTs = now
+    const k = 1 - Math.exp(-dt / MOOD_PARAM_TAU)
+    const defs = this._moodDefs.get(this.mood) ?? []
+    const active = new Set(defs.map((d) => d.idx))
+    for (const d of defs) {
+      let entry = this._moodCur.get(d.idx)
+      if (!entry) {
+        entry = { mode: d.mode, cur: d.mode === 'mul' ? 1 : 0 }
+        this._moodCur.set(d.idx, entry)
+      }
+      entry.mode = d.mode
+      entry.cur += (d.v - entry.cur) * k
+      if (d.mode === 'abs') {
+        core.setParameterValueByIndex(d.idx, entry.cur)
+      } else {
+        // mul：乘算当前值（眨眼动画先写 EyeLOpen，乘算保留眨眼）
+        core.setParameterValueByIndex(d.idx, core.getParameterValueByIndex(d.idx) * entry.cur)
+      }
+    }
+    // 上一心情遗留参数 → 平滑回落默认值，收敛后移除
+    for (const [idx, entry] of this._moodCur) {
+      if (active.has(idx)) continue
+      const fallback = entry.mode === 'mul' ? 1 : 0
+      entry.cur += (fallback - entry.cur) * k
+      if (entry.mode === 'abs') {
+        core.setParameterValueByIndex(idx, entry.cur)
+      } else {
+        core.setParameterValueByIndex(idx, core.getParameterValueByIndex(idx) * entry.cur)
+      }
+      if (Math.abs(entry.cur - fallback) < 0.01) this._moodCur.delete(idx)
+    }
   }
 
   get x() {
