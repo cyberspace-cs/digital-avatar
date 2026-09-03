@@ -87,7 +87,8 @@ export default function App() {
       if (invite) {
         api.acceptInvite(invite, u.id).then((r) => {
           setToast(`收到 ${r.partner.name} 送你的数字分身！`)
-          location.href = location.origin
+          // 回到应用页（生产部署在 /digital-avatar/ 子路径，不能用 location.origin）
+          location.href = location.origin + import.meta.env.BASE_URL
         }).catch(() => setToast('邀请链接无效'))
       }
     } else {
@@ -126,7 +127,9 @@ export default function App() {
       meS.load(app.stage, MY_MODEL, MODEL_SCALE, tier),
       partnerS.load(app.stage, PARTNER_MODEL, MODEL_SCALE, tier),
     ]).then(() => {
-      partnerS.model!.visible = false
+      // 绑定关系可能在模型加载完成前就已就绪（getPartner 比模型加载快），
+      // 这里按当前状态决定可见性，否则要等下一次 partner 变化才会显示
+      partnerS.model!.visible = !!stateRef.current.partner
       meS.setPosition(window.innerWidth * 0.35, window.innerHeight * 0.78)
       partnerS.setPosition(window.innerWidth * 0.65, window.innerHeight * 0.78)
       bindDrag(meS, 'me')
@@ -348,7 +351,7 @@ export default function App() {
     if (invite) {
       const r = await api.acceptInvite(invite, user.id)
       setToast(`收到 ${r.partner.name} 送你的数字分身！`)
-      setTimeout(() => (location.href = location.origin), 1200)
+      setTimeout(() => (location.href = location.origin + import.meta.env.BASE_URL), 1200)
     }
   }
 
