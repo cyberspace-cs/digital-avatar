@@ -24,8 +24,12 @@ type Entry = {
   /** 相对路径（model3.json 里写的值），是 blobMap 的 key */
   relative: string
   binary: boolean
-  /** 可选：LOD sd.png 绝对 URL 覆盖 */
-  forceAbsoluteOverride?: string
+  /**
+   * 按优先级排列的绝对 URL 候选（依次尝试，首个 200 即用）。
+   * 纹理走 WebP 优先、PNG 兜底；SD 档再加 .sd.webp / .sd.png。
+   * 其它资源就是 [原始绝对 URL]。
+   */
+  candidates: string[]
 }
 
 const scope = self as unknown as WorkerGlobalScope & typeof globalThis
@@ -46,10 +50,11 @@ scope.onmessage = async (e: MessageEvent<PrefetchRequest>) => {
   // 2) 收集需要预取的文件（key 是 model3.json 里的原始相对路径）
   const entries: Entry[] = []
   const FR = modelJson?.FileReferences || {}
-  const add = (relative: string, binary: boolean, forceAbsoluteOverride?: string) => {
+  const add = (relative: string, binary: boolean, candidates?: string[]) => {
     if (!relative) return
     if (/^(blob|data|https?):/i.test(relative)) return // 已经是绝对 URL，直接跳过
-    entries.push({ relative, binary, forceAbsoluteOverride })
+    const abs = new URL(relative, baseDir).href
+    entries.push({ relative, binary, candidates: candidates && candidates.length ? candidates : [abs] })
   }
 
   if (typeof FR.Moc === 'string') add(FR.Moc, true)
@@ -58,11 +63,17 @@ scope.onmessage = async (e: MessageEvent<PrefetchRequest>) => {
   if (typeof FR.UserData === 'string') add(FR.UserData, false)
   if (typeof FR.DisplayInfo === 'string') add(FR.DisplayInfo, false)
 
+  // 纹理：WebP 优先（体积约为 PNG 的 1/6~1/8，带 alpha），PNG 兜底。
+  // SD 档（移动端）再优先 .sd.webp / .sd.png 半尺寸版本。
   const textures: string[] = Array.isArray(FR.Textures) ? FR.Textures : []
   textures.forEach((relative) => {
     const abs = new URL(relative, baseDir).href
-    const sdOverride = lod === 'sd' ? abs.replace(/\.png$/, '.sd.png') : undefined
-    add(relative, true, sdOverride)
+    const webp = abs.replace(/\.png$/i, '.webp')
+    const candidates =
+      lod === 'sd'
+        ? [abs.replace(/\.png$/i, '.sd.webp'), abs.replace(/\.png$/i, '.sd.png'), webp, abs]
+        : [webp, abs]
+    add(relative, true, candidates)
   })
 
   const motions: Record<string, Array<{ File?: string; Sound?: string }>> = FR.Motions ?? {}
@@ -80,12 +91,15 @@ scope.onmessage = async (e: MessageEvent<PrefetchRequest>) => {
   const blobMap: Record<string, string> = {}
   await Promise.all(
     entries.map(async (ent) => {
-      const abs = new URL(ent.relative, baseDir).href
-      const target = ent.forceAbsoluteOverride ?? abs
-      let res = await fetch(target)
-      // 如果请求的 sd.png 不存在，回落到原图
-      if (!res.ok && ent.forceAbsoluteOverride && target !== abs) res = await fetch(abs)
-      if (!res.ok) return // 失败则跳过，让库走原始 XHR（不会白屏）
+      // 按候选顺序尝试（WebP→PNG、SD→HD），首个 200 即用；全失败则跳过让库走原始 XHR
+      let res: Response | null = null
+      for (const url of ent.candidates) {
+        try {
+          const r = await fetch(url)
+          if (r.ok) { res = r; break }
+        } catch (_e) { /* 尝试下一个候选 */ }
+      }
+      if (!res) return // 失败则跳过，让库走原始 XHR（不会白屏）
       const payload = ent.binary ? await res.arrayBuffer() : await res.text()
       const mime = res.headers.get('content-type') || (ent.binary ? 'application/octet-stream' : 'application/json')
       const blob = new Blob([payload as BlobPart], { type: mime })

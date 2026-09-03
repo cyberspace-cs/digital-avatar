@@ -2,6 +2,41 @@
 
 > 约定：每次文档/功能迭代，在此追加一条记录；文档改动同时在 `versions/` 存一份带时间戳的不可变副本。
 
+## [V1.1.1] 2026-09-03 12:20（master，已部署）—— 首屏加载提速
+
+> 接续 V1.1.0：opt1/opt2 解决了"渲染帧率/卡顿"，本条解决"加载慢/耗流量"。用线上实际传输字节定位瓶颈，不猜。
+
+### 瓶颈实测（nginx access log + curl 传输字节）
+- **gzip 形同虚设**：nginx.conf 只有 `gzip on;`，缺 `gzip_types`，nginx 默认仅压 `text/html` → 866KB JS、25KB motion JSON 全部**未压缩**传输（响应无 `Content-Encoding`）
+- **纹理是 2048 PNG，体积极大**：Hiyori 两张 HD 共 **4.2MB**（texture_00 1.8MB + texture_01 2.4MB），SD PNG 也有 1.2MB；PNG 已 deflate 不再吃 gzip
+- **零缓存头**：所有静态资源每次访问重新下载
+- 优化前首屏关键字节（Hiyori HD）≈ **5.5MB**
+
+### 优化
+- **纹理 PNG → WebP**（`scripts/build-webp.ps1`，ffmpeg/libwebp，`yuva420p` 保留透明通道）：HD q88、SD q82
+  - texture_01.png 2.4MB → **300KB**；texture_00.png 1.8MB → **242KB**（单张约为原来 1/6~1/8）
+  - 10 张纹理（5 HD + 5 SD）全部转换，PNG 原文件保留作兜底
+- **预取 Worker 改 WebP 优先、PNG 兜底**（`prefetch.worker.ts`）：候选链 HD=`[xx.webp, xx.png]`，SD=`[xx.sd.webp, xx.sd.png, xx.webp, xx.png]`，逐个 fetch 首个 200 即用；blobMap key 仍是原始 `.png` 相对路径，库侧 resolveURL 无感知
+- **nginx gzip_types 补全**（`scripts/deploy-perf-nginx.sh` → `/etc/nginx/conf.d/davatar-gzip.conf`）：对 JS/JSON/wasm/CSS/SVG/**octet-stream(moc3)** 开 gzip（图片本身已压缩不压）
+- **静态缓存头**：`assets/` 30天 immutable（hash 命名）、`models/` 7天、`index.html` no-cache（保新版即时生效）
+
+### 效果（线上实测传输字节，Hiyori HD）
+| 资源 | 优化前 | 优化后 |
+| --- | --- | --- |
+| JS bundle | 866KB（未压） | **246KB**（gzip） |
+| Hiyori.moc3 | 444KB（未压） | **221KB**（gzip） |
+| motion JSON（单） | 25.8KB（未压） | **2.4KB**（gzip） |
+| texture_00 | 1.8MB PNG | **242KB** WebP |
+| texture_01 | 2.4MB PNG | **300KB** WebP |
+| **首屏关键合计** | **≈5.5MB** | **≈1.0MB（-82%）** |
+
+移动端 SD 档纹理更小（两张 sd.webp 共约 212KB）；二次访问命中浏览器缓存近乎瞬开。
+
+### 验证记录
+- curl 实测：JS/motion/moc3 均返回 `Content-Encoding: gzip`；webp 返回 `200 image/webp`；缓存头 assets immutable / models 7d / index no-cache ✅
+- nginx access log：部署后新会话请求 `.webp` / `.sd.webp` 且全 200，旧缓存客户端仍能命中 `.png` 兜底 ✅
+- 浏览器冷启：canvas 渲染正常、PerfGovernor 生效、控制台零报错 ✅
+
 ## [V1.1.0-opt2] 2026-09-03 01:12（分支 feat/render-optimize，未合入 master）
 
 ### 新增
