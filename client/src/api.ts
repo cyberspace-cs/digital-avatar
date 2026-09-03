@@ -29,4 +29,10 @@ export const api = {
       body: JSON.stringify({ userId, mood, visibility }),
     }),
   getEvents: (userId: string) => req<{ events: any[] }>(`/api/events/${userId}`),
+  // ---------- V1.2 火花成长 ----------
+  getBond: (userId: string) => req<{ bond: any | null }>(`/api/bond/${userId}`),
+  getQuests: (userId: string) =>
+    req<{ quests: any[]; streak: number; lastActiveDay: string | null; cold: boolean }>(
+      `/api/quests/${userId}`,
+    ),
 }

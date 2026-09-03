@@ -6,7 +6,7 @@ import { PerfGovernor } from './live2d/perf'
 import { api } from './api'
 import { connectSocket, emit, getSocket } from './socket'
 import Admin from './Admin'
-import type { InteractionEvent, Mood, User, Visibility } from './types'
+import type { BondMeta, InteractionEvent, Mood, QuestItem, User, Visibility } from './types'
 
 // 模型路径需带 base 前缀（生产部署在 /digital-avatar/ 子路径下）
 const BASE = import.meta.env.BASE_URL
@@ -15,6 +15,7 @@ const PARTNER_MODEL = `${BASE}models/natori/Natori.model3.json`
 const MODEL_SCALE = 0.12
 
 type MenuPos = { x: number; y: number; target: 'me' | 'partner' } | null
+type Tab = 'companion' | 'quests' | 'records' | 'me'
 
 const MOOD_LABELS: Record<Mood, string> = {
   neutral: '普通',
@@ -35,6 +36,32 @@ const ACTIONS = [
   { id: 'heart', label: '比心' },
   { id: 'wave', label: '挥手' },
   { id: 'pinch', label: '捏脸' },
+  { id: 'feed', label: '喂食' },
+  { id: 'flower', label: '送花' },
+]
+// 互动 Dock（V1.2 小火人化）
+const DOCK = [
+  { id: 'feed', emoji: '🧁' },
+  { id: 'pat', emoji: '🫳' },
+  { id: 'poke', emoji: '👉' },
+  { id: 'hug', emoji: '🤗' },
+  { id: 'flower', emoji: '💐' },
+]
+// 火花等级（与服务端 LEVELS 阈值一致，仅用于进度条计算）
+const LEVELS = [
+  { level: 1, name: '火种', at: 0 },
+  { level: 2, name: '火苗', at: 100 },
+  { level: 3, name: '小火人', at: 300 },
+  { level: 4, name: '烈焰', at: 700 },
+  { level: 5, name: '燎原', at: 1500 },
+  { level: 6, name: '不灭', at: 3000 },
+  { level: 7, name: '永恒', at: 6000 },
+]
+const TABS: { id: Tab; emoji: string; label: string }[] = [
+  { id: 'companion', emoji: '🏠', label: '陪伴' },
+  { id: 'quests', emoji: '🎯', label: '任务' },
+  { id: 'records', emoji: '💞', label: '记录' },
+  { id: 'me', emoji: '⚙️', label: '我的' },
 ]
 
 export default function App() {
@@ -65,13 +92,16 @@ export default function App() {
   const [visibility, setVisibility] = useState<Visibility>('public')
   const [menu, setMenu] = useState<MenuPos>(null)
   const [events, setEvents] = useState<InteractionEvent[]>([])
-  const [showRecords, setShowRecords] = useState(false)
   const [showMoodPicker, setShowMoodPicker] = useState(false)
   const [bubble, setBubble] = useState<{ who: 'me' | 'partner'; text: string } | null>(null)
-  const [hearts, setHearts] = useState<{ id: number; x: number; y: number }[]>([])
+  const [hearts, setHearts] = useState<{ id: number; x: number; y: number; emoji: string }[]>([])
   const [partnerOnline, setPartnerOnline] = useState(false)
   const [inviteLink, setInviteLink] = useState('')
   const [toast, setToast] = useState('')
+  // V1.2 小火人化：Tab 壳 + 火花成长
+  const [tab, setTab] = useState<Tab>('companion')
+  const [bond, setBond] = useState<BondMeta | null>(null)
+  const [quests, setQuests] = useState<QuestItem[]>([])
 
   const stateRef = useRef({ mood, visibility, me, partner })
   stateRef.current = { mood, visibility, me, partner }
@@ -208,12 +238,13 @@ export default function App() {
     else model.rotation = 0
   }
 
-  // ---------- 心形粒子 ----------
-  const spawnHearts = (x: number, y: number, n = 6) => {
+  // ---------- 粒子（心/蛋糕/花……随动作变化） ----------
+  const spawnHearts = (x: number, y: number, n = 6, emoji = '💛') => {
     const items = Array.from({ length: n }, (_, i) => ({
       id: Date.now() + i,
       x: x + (Math.random() - 0.5) * 120,
       y: y + (Math.random() - 0.5) * 60,
+      emoji,
     }))
     setHearts((h) => [...h, ...items])
     setTimeout(() => setHearts((h) => h.filter((i) => !items.includes(i))), 2600)
@@ -230,10 +261,12 @@ export default function App() {
       message: message ?? null,
     })
     // 本地立即播放发送方反馈（自己的分身做一个示意动作）
-    meSprite.current?.play('wave')
-    if (action === 'heart' || action === 'hug') {
-      const s = partnerSprite.current
-      if (s) spawnHearts(s.x, s.y - 260)
+    meSprite.current?.play(action === 'feed' || action === 'flower' ? 'wave' : action)
+    const s = partnerSprite.current
+    if (s) {
+      if (action === 'heart' || action === 'hug') spawnHearts(s.x, s.y - 260, 6, '💛')
+      if (action === 'feed') spawnHearts(s.x, s.y - 260, 5, '🧁')
+      if (action === 'flower') spawnHearts(s.x, s.y - 260, 5, '💐')
     }
     setMenu(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -278,12 +311,20 @@ export default function App() {
       sprite.playSadReaction()
     } else {
       sprite.play(ev.action)
-      if (ev.action === 'heart') spawnHearts(sprite.x, sprite.y - 260)
+      if (ev.action === 'heart' || ev.action === 'hug') spawnHearts(sprite.x, sprite.y - 260, 6, '💛')
+      if (ev.action === 'feed') spawnHearts(sprite.x, sprite.y - 260, 5, '🧁')
+      if (ev.action === 'flower') spawnHearts(sprite.x, sprite.y - 260, 5, '💐')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ---------- Socket 生命周期 ----------
+  const refreshQuests = useCallback(() => {
+    const uid = stateRef.current.me?.id
+    if (!uid) return
+    api.getQuests(uid).then((r) => setQuests(r.quests)).catch(() => {})
+  }, [])
+
   useEffect(() => {
     if (!me) return
     connectSocket(me.id, {
@@ -298,6 +339,12 @@ export default function App() {
           setPartnerMood(null)
           partnerSprite.current?.setMood('neutral')
         }
+      },
+      // V1.2 火花成长：服务端结算后双端实时同步
+      growth_update: (g: any) => {
+        setBond(g.bond)
+        if (g.leveledUp) setToast(`🔥 火花升级！Lv.${g.bond.level} ${g.bond.levelName}`)
+        refreshQuests()
       },
     })
     api.getPartner(me.id).then(async (r) => {
@@ -321,10 +368,27 @@ export default function App() {
       }
     })
     api.getEvents(me.id).then((r) => setEvents(r.events))
+    // V1.2：拉取火花成长与每日任务
+    api.getBond(me.id).then((r) => setBond(r.bond)).catch(() => {})
+    refreshQuests()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me])
 
   const [partnerMood, setPartnerMood] = useState<Mood | null>(null)
+
+  // ---------- 断联软惩罚：火花变灰时，仅对 neutral 的分身叠加沮丧表情 ----------
+  useEffect(() => {
+    if (!bond) return
+    if (bond.cold) {
+      if (mood === 'neutral') meSprite.current?.setMood('low')
+      if (!partnerMood || partnerMood === 'neutral') partnerSprite.current?.setMood('low')
+    } else {
+      // 复燃：恢复各自当前状态的表现
+      if (mood === 'neutral') meSprite.current?.setMood('neutral')
+      partnerSprite.current?.setMood(partnerMood ?? 'neutral')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bond?.cold, mood, partnerMood])
 
   // ---------- 设置状态 ----------
   const applyMood = async (m: Mood, v?: Visibility) => {
@@ -404,26 +468,157 @@ export default function App() {
   return (
     <div className="space">
       <div className="aurora" aria-hidden><span /><span /><span /></div>
+      {/* 等级光晕：火花等级越高越亮，断联时熄灭 */}
+      {bond && !bond.cold && (
+        <div
+          className="spark-glow"
+          style={{ opacity: 0.25 + (bond.level / 7) * 0.55 }}
+          aria-hidden
+        />
+      )}
       <div ref={canvasHost} className="canvas-host" />
 
-      {/* 顶栏 */}
+      {/* 顶栏（精简：状态设置收进「我的」Tab） */}
       <div className="topbar">
         <div className="brand">数字分身</div>
         <div className="topbar-right">
           {partner ? (
             <span className="chip">
-              {partner.name} {partnerOnline ? '🟢 在线' : '⚪ 离线'}
+              {partner.name} {partnerOnline ? '🟢' : '⚪'}
               {partnerMood && partnerMood !== 'neutral' && ` · ${MOOD_LABELS[partnerMood]}`}
             </span>
           ) : (
             <button className="btn ghost" onClick={makeInvite}>把我的分身送给 TA</button>
           )}
-          <button className="btn ghost" onClick={() => setShowMoodPicker(true)}>
-            我的状态：{MOOD_LABELS[mood]}
-          </button>
-          <button className="btn ghost" onClick={() => setShowRecords(true)}>互动记录</button>
         </div>
       </div>
+
+      {/* 火花关系卡（陪伴 Tab） */}
+      {tab === 'companion' && bond && (
+        <div className={`bond-card ${bond.cold ? 'cold' : ''}`}>
+          <div className="bond-row">
+            <span className="flame">{bond.cold ? '🕯️' : '🔥'}</span>
+            <span className="bond-title">火花 Lv.{bond.level} {bond.levelName}</span>
+            <span className="bond-streak">
+              {bond.cold ? '火花休息中' : `连续 ${bond.streak} 天`}
+            </span>
+          </div>
+          <div className="spark-bar">
+            <div
+              className="spark-fill"
+              style={{ width: `${sparkPct(bond)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 互动 Dock（陪伴 Tab） */}
+      {tab === 'companion' && (
+        <div className="dock">
+          {DOCK.map((d) => (
+            <button key={d.id} className="dock-btn" onClick={() => sendAction(d.id)}>
+              <span className="dock-emoji">{d.emoji}</span>
+              <span className="dock-label">{labelOf(d.id)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 任务 Tab */}
+      {tab === 'quests' && (
+        <div className="panel">
+          <div className={`panel-card remind ${bond?.cold ? 'cold' : ''}`}>
+            {bond?.cold
+              ? '🕯️ 今天你们还没互动，火花休息中——互相任意互动 1 次即可复燃'
+              : bond
+                ? `🔥 火花正旺！已连续 ${bond.streak} 天，今天互动过了`
+                : '🤝 绑定 TA 后开启每日任务和火花养成'}
+          </div>
+          {quests.map((q) => (
+            <div key={q.id} className={`panel-card quest ${q.rewarded ? 'rewarded' : ''}`}>
+              <div className="quest-row">
+                <span>{q.label}</span>
+                <span className={q.rewarded ? 'ok' : q.done ? 'ready' : ''}>
+                  {q.rewarded ? `+${q.reward} ✓` : `${q.progress}/${q.target}`}
+                </span>
+              </div>
+              <div className="quest-bar">
+                <div style={{ width: `${(q.progress / q.target) * 100}%` }} />
+              </div>
+              <div className="quest-reward">完成 +{q.reward} 火花</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 记录 Tab */}
+      {tab === 'records' && (
+        <div className="panel">
+          {events.length === 0 && <p className="sub">还没有互动，去戳戳 TA 吧</p>}
+          <ul className="records-list">
+            {events.map((ev) => (
+              <li key={ev.id}>
+                <span className="time">
+                  {parseTime(ev.createdAt).toLocaleString('zh-CN', {
+                    month: 'numeric',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </span>
+                <span>
+                  {ev.senderId === me.id ? '你' : partner?.name ?? 'TA'}
+                  {ev.message
+                    ? ` 说：${ev.message}`
+                    : ` ${labelOf(ev.action)}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 我的 Tab */}
+      {tab === 'me' && (
+        <div className="panel">
+          <div className="panel-card">
+            <h3>{me.name}</h3>
+            <p className="sub">
+              {partner
+                ? `与 ${partner.name} 已绑定 ❤${bond ? ` · 火花 Lv.${bond.level} ${bond.levelName}` : ''}`
+                : '还没有绑定 TA'}
+            </p>
+          </div>
+          <div className="panel-card">
+            <button className="btn block" onClick={() => setShowMoodPicker(true)}>
+              设置状态 · 当前：{MOOD_LABELS[mood]} / {VIS_LABELS[visibility]}
+            </button>
+            {!partner && (
+              <button className="btn ghost block" onClick={makeInvite}>
+                把我的分身送给 TA
+              </button>
+            )}
+            <button className="btn ghost block" onClick={() => setTheme(theme === 'v1' ? 'v2' : 'v1')}>
+              🎨 切换主题（当前：{theme === 'v1' ? 'v1 经典' : 'v2 极光'}）
+            </button>
+          </div>
+          <p className="sub center tiny">数字分身 V1.2 · 小火人化</p>
+        </div>
+      )}
+
+      {/* 底部 Tab 导航 */}
+      <nav className="tabbar">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            className={`tab ${tab === t.id ? 'active' : ''}`}
+            onClick={() => setTab(t.id)}
+          >
+            <span className="tab-emoji">{t.emoji}</span>
+            <span className="tab-label">{t.label}</span>
+          </button>
+        ))}
+      </nav>
 
       {/* 邀请链接弹窗 */}
       {inviteLink && (
@@ -493,46 +688,15 @@ export default function App() {
         </div>
       )}
 
-      {/* 互动记录 */}
-      {showRecords && (
-        <div className="records-panel">
-          <div className="records-head">
-            <h3>互动记录</h3>
-            <button className="btn ghost" onClick={() => setShowRecords(false)}>×</button>
-          </div>
-          {events.length === 0 && <p className="sub">还没有互动，去戳戳 TA 吧</p>}
-          <ul>
-            {events.map((ev) => (
-              <li key={ev.id}>
-                <span className="time">
-                  {parseTime(ev.createdAt).toLocaleString('zh-CN', {
-                    month: 'numeric',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </span>
-                <span>
-                  {ev.senderId === me.id ? '你' : partner?.name ?? 'TA'}
-                  {ev.message
-                    ? ` 说：${ev.message}`
-                    : ` ${labelOf(ev.action)}`}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {/* 短句气泡 */}
       {bubble && (
         <div className={`bubble ${bubble.who}`}>{bubble.text}</div>
       )}
 
-      {/* 心形粒子 */}
+      {/* 粒子（心/蛋糕/花） */}
       {hearts.map((h) => (
         <div key={h.id} className="heart" style={{ left: h.x, top: h.y }}>
-          💛
+          {h.emoji}
         </div>
       ))}
 
@@ -552,6 +716,14 @@ export default function App() {
 
 function labelOf(action: string) {
   return ACTIONS.find((a) => a.id === action)?.label ?? action
+}
+
+/** 当前等级内的火花进度（0-100），满级显示 100 */
+function sparkPct(b: BondMeta) {
+  if (b.nextLevelAt == null) return 100
+  const curAt = LEVELS.find((l) => l.level === b.level)?.at ?? 0
+  const span = b.nextLevelAt - curAt
+  return Math.min(100, Math.max(3, Math.round(((b.growth - curAt) / span) * 100)))
 }
 
 /** SQLite 的 localtime 格式 "YYYY-MM-DD HH:MM:SS" 需转成可解析格式 */

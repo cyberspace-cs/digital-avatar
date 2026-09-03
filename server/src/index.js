@@ -74,6 +74,88 @@ app.get('/api/events/:userId', (req, res) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
 
+// ---------- V1.2 火花成长体系（服务端权威） ----------
+const LEVELS = [
+  { level: 1, name: '火种', at: 0 },
+  { level: 2, name: '火苗', at: 100 },
+  { level: 3, name: '小火人', at: 300 },
+  { level: 4, name: '烈焰', at: 700 },
+  { level: 5, name: '燎原', at: 1500 },
+  { level: 6, name: '不灭', at: 3000 },
+  { level: 7, name: '永恒', at: 6000 },
+]
+// 火花规则：interaction 每日上限按次数（30 次×1）；feed/flower 每日 5 次×2
+const SPARK_RULES = {
+  interaction: { delta: 1, capTimes: 30 },
+  feed: { delta: 2, capTimes: 5 },
+  flower: { delta: 2, capTimes: 5 },
+}
+const QUESTS = [
+  { id: 'interact5', label: '互相互动 5 次', target: 5, reward: 10 },
+  { id: 'saymsg', label: '说一句话', target: 1, reward: 10 },
+  { id: 'feed1', label: '给 TA 喂一次食', target: 1, reward: 10 },
+]
+
+const todayStr = () => new Date().toLocaleDateString('sv-SE')
+const yesterdayStr = () => new Date(Date.now() - 86400000).toLocaleDateString('sv-SE')
+
+function levelOf(growth) {
+  let cur = LEVELS[0]
+  let next = null
+  for (const l of LEVELS) {
+    if (growth >= l.at) cur = l
+    else { next = l; break }
+  }
+  return { level: cur.level, levelName: cur.name, nextLevelAt: next ? next.at : null }
+}
+
+function bondMeta(bond) {
+  return {
+    growth: bond.growth ?? 0,
+    streak: bond.streak ?? 0,
+    lastActiveDay: bond.last_active_day ?? null,
+    cold: !bond.last_active_day || bond.last_active_day < todayStr(),
+    ...levelOf(bond.growth ?? 0),
+  }
+}
+
+function questCountsToday(bond, day) {
+  const rows = q.eventsOfDayForBond.all(
+    `${day} 00:00:00`, bond.user_a, bond.user_b, bond.user_b, bond.user_a,
+  )
+  return {
+    interact5: rows.length,
+    saymsg: rows.filter((r) => r.message).length,
+    feed1: rows.filter((r) => r.action === 'feed').length,
+  }
+}
+
+app.get('/api/bond/:userId', (req, res) => {
+  const bond = q.bondsOf.get(req.params.userId, req.params.userId)
+  if (!bond) return res.json({ bond: null })
+  res.json({ bond: bondMeta(bond) })
+})
+
+app.get('/api/quests/:userId', (req, res) => {
+  const bond = q.bondsOf.get(req.params.userId, req.params.userId)
+  if (!bond) return res.json({ quests: [], streak: 0, lastActiveDay: null, cold: true })
+  const day = todayStr()
+  const counts = questCountsToday(bond, day)
+  const quests = QUESTS.map((t) => {
+    const progress = Math.min(counts[t.id] ?? 0, t.target)
+    return {
+      id: t.id,
+      label: t.label,
+      target: t.target,
+      reward: t.reward,
+      progress,
+      done: progress >= t.target,
+      rewarded: !!q.growthEventExists.get(bond.id, `quest:${t.id}:${day}`),
+    }
+  })
+  res.json({ quests, streak: bond.streak ?? 0, lastActiveDay: bond.last_active_day, cold: bond.last_active_day !== day })
+})
+
 // ---------- Socket.IO ----------
 const server = http.createServer(app)
 const io = new Server(server, { cors: { origin: '*' } })
@@ -126,6 +208,55 @@ io.on('connection', (socket) => {
     }
     // 记录进发送方时间线
     socket.emit('interaction', { ...event, senderId, self: true })
+
+    // ---- V1.2 火花结算（服务端权威；失败不阻塞互动播放）----
+    try {
+      const bond = q.getBond.get(senderId, receiverId, senderId, receiverId)
+      if (bond) {
+        const day = todayStr()
+        const before = levelOf(bond.growth ?? 0)
+
+        // streak：今天首次互动 → 连续 +1；断档 → 重置为 1
+        let streak = bond.streak ?? 0
+        if (bond.last_active_day !== day) {
+          streak = bond.last_active_day === yesterdayStr() ? streak + 1 : 1
+        }
+
+        // 火花增量：按当日 reason 计数做软上限
+        const reasonKey = action === 'feed' || action === 'flower' ? action : 'interaction'
+        const rule = SPARK_RULES[reasonKey]
+        let delta = 0
+        const used = q.growthCountsOfDay.all(bond.id, day).find((r) => r.reason === reasonKey)?.n ?? 0
+        if (rule && used < rule.capTimes) delta = rule.delta
+
+        // 每日任务奖励（判重：quest:<id>:<day> 每天只发一次）
+        let questDelta = 0
+        const counts = questCountsToday(bond, day)
+        for (const t of QUESTS) {
+          if ((counts[t.id] ?? 0) >= t.target && !q.growthEventExists.get(bond.id, `quest:${t.id}:${day}`)) {
+            q.insertGrowthEvent.run(uuid(), bond.id, t.reward, `quest:${t.id}:${day}`, day)
+            questDelta += t.reward
+          }
+        }
+
+        if (delta > 0) q.insertGrowthEvent.run(uuid(), bond.id, delta, reasonKey, day)
+        const growth = (bond.growth ?? 0) + delta + questDelta
+        q.updateBondGrowth.run(growth, streak, day, bond.id)
+
+        const after = levelOf(growth)
+        const payload = {
+          bond: { ...bondMeta({ ...bond, growth, streak, last_active_day: day }), growth, ...after },
+          delta: delta + questDelta,
+          leveledUp: after.level > before.level,
+        }
+        const s1 = online.get(senderId)
+        const s2 = online.get(receiverId)
+        if (s1) io.to(s1).emit('growth_update', payload)
+        if (s2) io.to(s2).emit('growth_update', payload)
+      }
+    } catch (err) {
+      console.error('[digital-avatar] growth settlement failed:', err)
+    }
   })
 
   socket.on('state_update', (payload) => {

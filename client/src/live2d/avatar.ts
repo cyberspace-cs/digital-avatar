@@ -80,6 +80,9 @@ const ACTION_MOTIONS: Record<string, { group: string; index?: number }> = {
   heart: { group: 'TapBody', index: 4 },
   hug: { group: 'TapBody', index: 5 },
   flick: { group: 'TapBody', index: 6 },
+  // V1.2 小火人化：喂食/送花（复用 TapBody 动作，反馈由 App 层粒子+表情补足）
+  feed: { group: 'TapBody', index: 2 },
+  flower: { group: 'TapBody', index: 3 },
 }
 
 /** 状态 → 视觉规则（State 层）。Natori 用命名表情；Hiyori 无表情文件会静默跳过 */

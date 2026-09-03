@@ -2,8 +2,16 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>数字分身 · Digital Avatar</title>
+    <!-- PWA：添加到主屏幕后全屏启动（V1.2 小火人化）。相对路径：生产 /digital-avatar/ 与开发 / 均正确解析 -->
+    <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" content="#0f1023" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="icon" type="image/svg+xml" href="icon.svg" />
+    <link rel="apple-touch-icon" href="icon.svg" />
     <script src="/live2d/live2dcubismcore.min.js"></script>
   </head>
   <body>

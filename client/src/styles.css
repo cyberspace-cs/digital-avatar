@@ -505,7 +505,7 @@ body,
 .theme-switch {
   position: fixed;
   right: 16px;
-  bottom: 16px;
+  bottom: 78px; /* V1.2：给底部 Tab 导航让位 */
   z-index: 45;
   width: 44px;
   height: 44px;
@@ -585,4 +585,294 @@ body,
 
 .admin-back {
   margin-top: 20px;
+}
+/* ============================================================
+   V1.2 小火人化：Tab 壳 / 火花关系卡 / 互动 Dock / 任务面板
+   ============================================================ */
+
+/* ---------- 等级光晕（火花等级越高越亮） ---------- */
+.spark-glow {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 35% 62%, rgba(255, 150, 80, 0.5), transparent 42%),
+    radial-gradient(circle at 65% 62%, rgba(255, 180, 100, 0.35), transparent 42%);
+  transition: opacity 1s var(--ease);
+}
+
+/* ---------- 火花关系卡 ---------- */
+.bond-card {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  width: min(420px, calc(100vw - 24px));
+  padding: 8px 14px 10px;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(var(--blur));
+}
+
+.bond-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.bond-row .flame {
+  font-size: 18px;
+}
+
+.bond-card.cold .flame {
+  filter: grayscale(1);
+  opacity: 0.7;
+}
+
+.bond-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  flex: 1;
+}
+
+.bond-streak {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.bond-card.cold .bond-title,
+.bond-card.cold .bond-streak {
+  color: var(--text-dim);
+}
+
+.spark-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.spark-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #ff6b4a, #ffb347);
+  transition: width 0.8s var(--ease);
+}
+
+.bond-card.cold .spark-fill {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ---------- 互动 Dock ---------- */
+.dock {
+  position: fixed;
+  bottom: 76px; /* Tab 导航上方 */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  display: flex;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  backdrop-filter: blur(var(--blur));
+}
+
+.dock-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 2px 4px;
+  color: var(--text);
+  transition: transform 0.15s var(--ease);
+}
+
+.dock-btn:hover {
+  transform: translateY(-3px) scale(1.1);
+}
+
+.dock-btn:active {
+  transform: scale(0.92);
+}
+
+.dock-emoji {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.dock-label {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* ---------- Tab 导航 ---------- */
+.tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  background: var(--glass-strong);
+  border-top: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--blur));
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px 0;
+  border-radius: var(--radius-md);
+  transition: color 0.2s var(--ease);
+}
+
+.tab.active {
+  color: var(--accent);
+}
+
+.tab-emoji {
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.tab-label {
+  font-size: 11px;
+}
+
+/* ---------- 内容面板（任务/记录/我的） ---------- */
+.panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 66px 16px 90px;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.25), rgba(0, 0, 0, 0.55)),
+    radial-gradient(ellipse at 50% 0%, var(--bg2), var(--bg1) 75%);
+}
+
+.panel-card {
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  margin-bottom: 12px;
+  backdrop-filter: blur(var(--blur));
+}
+
+.panel-card h3 {
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.panel-card .block {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  text-align: center;
+}
+
+.panel-card.remind {
+  font-size: 14px;
+  line-height: 1.6;
+  border-color: rgba(255, 179, 71, 0.35);
+  background: linear-gradient(90deg, rgba(255, 107, 74, 0.12), rgba(255, 179, 71, 0.08));
+}
+
+.panel-card.remind.cold {
+  border-color: var(--glass-border);
+  background: var(--glass);
+  filter: grayscale(0.4);
+}
+
+/* ---------- 任务卡片 ---------- */
+.quest-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.quest-row .ok {
+  color: #7ee787;
+}
+
+.quest-row .ready {
+  color: var(--accent);
+}
+
+.quest-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.quest-bar > div {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #ff6b4a, #ffb347);
+  transition: width 0.6s var(--ease);
+}
+
+.quest.rewarded {
+  opacity: 0.72;
+}
+
+.quest-reward {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ---------- 记录列表（Tab 版） ---------- */
+.records-list {
+  list-style: none;
+}
+
+.records-list li {
+  display: flex;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--glass-border);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.records-list .time {
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+  padding-top: 2px;
+}
+
+/* ---------- 小工具 ---------- */
+.sub.center {
+  text-align: center;
+}
+
+.sub.tiny {
+  font-size: 11px;
 }

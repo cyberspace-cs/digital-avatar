@@ -1,0 +1,20 @@
+{
+  "name": "数字分身 · Digital Avatar",
+  "short_name": "数字分身",
+  "description": "把一个属于你的人，放到另一个人的身边。Live2D 双人分身陪伴应用。",
+  "lang": "zh-CN",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1023",
+  "theme_color": "#0f1023",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

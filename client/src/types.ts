@@ -25,3 +25,24 @@ export interface UserState {
   visibility: Visibility
   updatedAt: string
 }
+
+/** 火花成长（V1.2 小火人化） */
+export interface BondMeta {
+  growth: number
+  streak: number
+  lastActiveDay: string | null
+  cold: boolean
+  level: number
+  levelName: string
+  nextLevelAt: number | null
+}
+
+export interface QuestItem {
+  id: string
+  label: string
+  target: number
+  reward: number
+  progress: number
+  done: boolean
+  rewarded: boolean
+}
