@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
 import './pixi-setup'
 import { AvatarSprite } from './live2d/avatar'
+import { PerfGovernor } from './live2d/perf'
 import { api } from './api'
 import { connectSocket, emit, getSocket } from './socket'
 import Admin from './Admin'
@@ -100,10 +101,21 @@ export default function App() {
     const app = new PIXI.Application({
       resizeTo: window,
       backgroundAlpha: 0,
-      antialias: true,
+      // 性能优化（证据存档见 docs/ARCHITECTURE.md）：
+      // - antialias:false —— PixiJS 官方弱设备首要建议（MSAA 逐帧开销大，Live2D 网格在 2x 分辨率下肉眼几乎无差）
+      // - resolution 跟随 DPR 上限 2x + autoDensity —— HiDPI 点对点清晰，同时防 4K 屏过度填充
+      antialias: false,
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
+      autoDensity: true,
+      powerPreference: 'high-performance',
     })
     canvasHost.current.appendChild(app.view as HTMLCanvasElement)
     appRef.current = app
+
+    // 自适应帧率治理：60/30/20 三档，掉帧自动降档（?perf= 可强制，?fps=1 看 HUD）
+    // tier 同步传给 AvatarSprite.load，用于纹理 LOD（balanced/saver → SD 半图）
+    const governor = new PerfGovernor(app)
+    const tier = governor.current
 
     const meS = new AvatarSprite()
     const partnerS = new AvatarSprite()
@@ -111,8 +123,8 @@ export default function App() {
     partnerSprite.current = partnerS
 
     Promise.all([
-      meS.load(app.stage, MY_MODEL, MODEL_SCALE),
-      partnerS.load(app.stage, PARTNER_MODEL, MODEL_SCALE),
+      meS.load(app.stage, MY_MODEL, MODEL_SCALE, tier),
+      partnerS.load(app.stage, PARTNER_MODEL, MODEL_SCALE, tier),
     ]).then(() => {
       partnerS.model!.visible = false
       meS.setPosition(window.innerWidth * 0.35, window.innerHeight * 0.78)
