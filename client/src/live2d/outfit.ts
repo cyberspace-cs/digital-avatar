@@ -192,17 +192,31 @@ export async function applyOutfitVariant(
     const relPath = variant.textures[norm]
     if (!relPath) continue
     const isSd = /\.sd\./i.test(base)
-    const assetPath = `${base2}models/${avatarId}/${isSd ? relPath.replace(/\.png$/i, '.sd.png') : relPath}`
+    const pngPath = isSd ? relPath.replace(/\.png$/i, '.sd.png') : relPath
+    const assetPath = `${base2}models/${avatarId}/${pngPath}`
+    // WebP 优先（约为 PNG 的 1/6 体积），PNG 兜底（与主纹理管线约定一致）
+    const candidates = [assetPath.replace(/\.png$/i, '.webp'), assetPath]
     const cacheKey = `${avatarId}|${variantId}|${base}`
     try {
       let outUrl = variantCache.get(cacheKey) ?? null
       if (!outUrl) {
         // V1.4.3 教训：SPA fallback 会给不存在的文件返回 200 的 index.html → 必须校验 image/*
-        const r = await fetch(assetPath)
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const ct = r.headers.get('content-type') ?? ''
-        if (!ct.startsWith('image/')) throw new Error(`not image: ${ct}`)
-        outUrl = URL.createObjectURL(await r.blob())
+        let lastErr: unknown = null
+        let blob: Blob | null = null
+        for (const path of candidates) {
+          try {
+            const r = await fetch(path)
+            if (!r.ok) throw new Error(`HTTP ${r.status}`)
+            const ct = r.headers.get('content-type') ?? ''
+            if (!ct.startsWith('image/')) throw new Error(`not image: ${ct}`)
+            blob = await r.blob()
+            break
+          } catch (err) {
+            lastErr = err
+          }
+        }
+        if (!blob) throw lastErr ?? new Error('no candidate')
+        outUrl = URL.createObjectURL(blob)
         variantCache.set(cacheKey, outUrl)
         ownedUrls.push(outUrl)
       }
