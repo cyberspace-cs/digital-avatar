@@ -7,6 +7,8 @@ export interface User {
   avatar: string
   /** V1.3 换装：穿搭风格（ColorMatrix 预设 id） */
   style?: string
+  /** V1.5.0 衣橱 2.0：款式（整纹理替换，'base' = 原生） */
+  outfit?: string
   personality: string
 }
 

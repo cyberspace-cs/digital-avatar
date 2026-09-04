@@ -99,6 +99,8 @@ export const q = {
   // ---------- V1.3 换装 ----------
   updateUserAvatar: db.prepare('UPDATE users SET avatar = ? WHERE id = ?'),
   updateUserStyle: db.prepare('UPDATE users SET style = ? WHERE id = ?'),
+  // V1.5.0 衣橱 2.0：款式（整纹理替换，'base' = 原生）
+  updateUserOutfit: db.prepare('UPDATE users SET outfit = ? WHERE id = ?'),
   insertGrowthEvent: db.prepare(
     'INSERT INTO growth_events (id, bond_id, delta, reason, day) VALUES (?, ?, ?, ?, ?)',
   ),

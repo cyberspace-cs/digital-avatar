@@ -75,13 +75,15 @@ app.get('/api/partner/:userId', (req, res) => {
 })
 
 app.post('/api/state', (req, res) => {
-  const { userId, mood, visibility, avatar, style } = req.body
+  const { userId, mood, visibility, avatar, style, outfit } = req.body
   q.setState.run(userId, mood ?? 'neutral', visibility ?? 'public')
   // V1.3 换装：形象（模型）与穿搭风格（滤镜）持久化在 users 行上
   if (avatar) q.updateUserAvatar.run(avatar, userId)
   if (style) q.updateUserStyle.run(style, userId)
+  // V1.5.0 衣橱 2.0：款式（整纹理替换）持久化
+  if (outfit) q.updateUserOutfit.run(outfit, userId)
   const user = q.getUser.get(userId)
-  res.json({ state: q.getState.get(userId), avatar: user?.avatar, style: user?.style ?? 'default' })
+  res.json({ state: q.getState.get(userId), avatar: user?.avatar, style: user?.style ?? 'default', outfit: user?.outfit ?? 'base' })
 })
 
 app.get('/api/state/:userId', (req, res) => {
@@ -90,6 +92,7 @@ app.get('/api/state/:userId', (req, res) => {
     state: q.getState.get(req.params.userId) ?? null,
     avatar: user?.avatar ?? 'hiyori',
     style: user?.style ?? 'default',
+    outfit: user?.outfit ?? 'base',
   })
 })
 

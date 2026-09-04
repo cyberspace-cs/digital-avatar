@@ -23,16 +23,16 @@ export const api = {
     }),
   getPartner: (userId: string) => req<{ partner: any | null }>(`/api/partner/${userId}`),
   getState: (userId: string) =>
-    req<{ state: any | null; avatar?: string; style?: string }>(`/api/state/${userId}`),
+    req<{ state: any | null; avatar?: string; style?: string; outfit?: string }>(`/api/state/${userId}`),
   setState: (userId: string, mood: string, visibility: string) =>
     req<{ state: any }>('/api/state', {
       method: 'POST',
       body: JSON.stringify({ userId, mood, visibility }),
     }),
   getEvents: (userId: string) => req<{ events: any[] }>(`/api/events/${userId}`),
-  // ---------- V1.3 换装：形象 / 穿搭风格 ----------
-  setLook: (userId: string, look: { avatar?: string; style?: string }) =>
-    req<{ state: any; avatar?: string; style?: string }>('/api/state', {
+  // ---------- V1.3 换装：形象 / 穿搭风格 / V1.5.0 款式 ----------
+  setLook: (userId: string, look: { avatar?: string; style?: string; outfit?: string }) =>
+    req<{ state: any; avatar?: string; style?: string; outfit?: string }>('/api/state', {
       method: 'POST',
       body: JSON.stringify({ userId, ...look }),
     }),

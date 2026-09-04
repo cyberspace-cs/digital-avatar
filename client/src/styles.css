@@ -464,6 +464,20 @@ body,
   color: var(--text);
 }
 
+/* V1.5.0 款式行（衣橱 2.0）：款 chip 与色 chip 视觉区分——款用虚线描边（"换件衣服"），
+   色 chip 保持实线（"染色"）。行内通常只有 2 个 chip，不挤占 3 列网格 */
+.variant-row {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.variant-chip {
+  border-style: dashed;
+}
+
+.variant-chip .style-label {
+  font-weight: 600;
+}
+
 /* 首个模型加载中提示（感知性能） */
 .loading-pill {
   position: fixed;

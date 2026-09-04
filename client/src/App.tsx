@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
 import './pixi-setup'
-import { AvatarSprite, OUTFIT_STYLES } from './live2d/avatar'
+import { AvatarSprite, OUTFIT_STYLES, OUTFIT_VARIANTS } from './live2d/avatar'
 import { AVATAR_LIBRARY, AVATAR_LABELS, AVATAR_GENDER, MODEL_URLS, DEFAULT_AVATAR } from './live2d/models'
 import { PerfGovernor } from './live2d/perf'
 import type { QualityTier } from './live2d/perf'
@@ -106,6 +106,8 @@ export default function App() {
   const [quests, setQuests] = useState<QuestItem[]>([])
   // V1.3 换装：自己的穿搭风格（形象跟 me.avatar 走）
   const [myStyle, setMyStyle] = useState('default')
+  // V1.5.0 衣橱 2.0：自己的款式（'base' = 原生；款式属于形象，换形象时回落 base）
+  const [myOutfit, setMyOutfit] = useState('base')
   // 首个模型加载中：给用户"分身登场中"反馈，而不是对着空白等
   const [booting, setBooting] = useState(true)
   // V1.4.3 桌宠模式：藏起整个 App 壳，只留一只可拖拽的小人 + 迷你互动坞
@@ -160,6 +162,13 @@ export default function App() {
           meSprite.current?.applyStyle(r.style)
         } else if (r.style && r.style !== 'default') {
           setMyStyle(r.style)
+        }
+        // V1.5.0 衣橱 2.0：服务端款式权威对齐（换设备场景），本地一致则初始加载已带款式
+        const localOutfit = localStorage.getItem('da_outfit') ?? 'base'
+        if (r.outfit && r.outfit !== 'base' && r.outfit !== localOutfit) {
+          setMyOutfit(r.outfit)
+          localStorage.setItem('da_outfit', r.outfit)
+          meSprite.current?.applyVariant(r.outfit)
         }
         if (r.avatar && r.avatar !== meAvatarRef.current) {
           // 服务端的形象更新（比如换过设备）
@@ -228,6 +237,9 @@ export default function App() {
     try {
       const savedStyle = localStorage.getItem('da_style')
       if (savedStyle && (OUTFIT_STYLES as any)[savedStyle]) meS.style = savedStyle
+      // V1.5.0 衣橱 2.0：初始加载即带款式（整纹理替换），同样避免双开
+      const savedOutfit = localStorage.getItem('da_outfit')
+      if (savedOutfit && savedOutfit !== 'base') meS.variant = savedOutfit
     } catch { /* 忽略坏数据 */ }
     meS.load(app.stage, MODEL_URLS[meAvatarRef.current] ?? MODEL_URLS[DEFAULT_AVATAR], MODEL_SCALE, tier).then(() => {
       meS.setPosition(window.innerWidth * 0.32, window.innerHeight * 0.78)
@@ -247,6 +259,9 @@ export default function App() {
       // V1.4.0：加载前就设置对方穿搭风格（避免"先原生再重载"的双重加载）
       const pStyle = stateRef.current.partner?.style
       if (pStyle && (OUTFIT_STYLES as any)[pStyle]) partnerS.style = pStyle
+      // V1.5.0 衣橱 2.0：加载前就设置对方款式（同防双开）
+      const pOutfit = stateRef.current.partner?.outfit
+      if (pOutfit && pOutfit !== 'base') partnerS.variant = pOutfit
       partnerS.load(app.stage, MODEL_URLS[pAvatar] ?? MODEL_URLS.natori, MODEL_SCALE, tier).then(() => {
         partnerS.setPosition(window.innerWidth * 0.68, window.innerHeight * 0.78)
         // 加载完成时按当前状态决定可见性与表情（getPartner 可能早已返回，竞态兜底）
@@ -600,8 +615,8 @@ export default function App() {
         }
       },
       state_update: (s: any) => {
-        // V1.3 换装：对方换了形象/穿搭，实时跟随
-        if (s.avatar || s.style) swapPartnerLook(s)
+        // V1.3 换装：对方换了形象/穿搭/款式，实时跟随
+        if (s.avatar || s.style || s.outfit) swapPartnerLook(s)
         // 只在对方公开状态时展示；对方分身表情同步变化
         if (s.visibility === 'public') {
           setPartnerMood(s.mood)
@@ -729,8 +744,33 @@ export default function App() {
     // 自动回落"原生"，避免 UI 里选不回已隐藏的女款
     const st = OUTFIT_STYLES[myStyle]
     const g = AVATAR_GENDER[key] ?? 'f'
+    // V1.5.0：换形象后款式/色板都跟着形象走——旧款式属于旧形象的纹理文件，
+    // 必须回落 base；色板性别不符时回落"原生"
+    if (myOutfit !== 'base' && !OUTFIT_VARIANTS[key]?.some((v) => v.id === myOutfit)) {
+      setMyOutfit('base')
+      localStorage.setItem('da_outfit', 'base')
+      api.setLook(me.id, { outfit: 'base' }).catch(() => {})
+      emit('state_update', { userId: me.id, avatar: key, outfit: 'base' })
+      meSprite.current?.applyVariant('base').catch(() => {})
+    }
     if (st?.gender && st.gender !== g) void applyStyleLocal('default')
     setToast(`已换上 ${AVATAR_LABELS[key] ?? key}`)
+  }
+
+  /**
+   * 切换款式（V1.5.0 衣橱 2.0：整张服装纹理替换，真·换衣服），双端同步。
+   * 颜色轴（myStyle）保持不变——款式 × 颜色可自由组合。
+   */
+  const applyVariantLocal = async (variantId: string) => {
+    if (!me) return
+    setMyOutfit(variantId)
+    localStorage.setItem('da_outfit', variantId)
+    const label = OUTFIT_VARIANTS[me.avatar]?.find((v) => v.id === variantId)?.label ?? variantId
+    setToast(variantId === 'base' ? '换回原款…' : `换款式：${label}…`)
+    await meSprite.current?.applyVariant(variantId)
+    api.setLook(me.id, { outfit: variantId }).catch(() => {})
+    emit('state_update', { userId: me.id, outfit: variantId })
+    setToast(variantId === 'base' ? '已换回原款' : `已换上 ${label}`)
   }
 
   /** 切换穿搭风格（V1.4.0 真实换装：重染服装纹理，肤色不变），双端同步 */
@@ -747,14 +787,22 @@ export default function App() {
     setToast(styleId === 'default' ? '已换回原生' : `已换上 ${label}`)
   }
 
-  /** 对方换装（socket 通知到达时换 TA 的模型/穿搭） */
-  const swapPartnerLook = (look: { avatar?: string; style?: string }) => {
+  /** 对方换装（socket 通知到达时换 TA 的模型/穿搭/款式） */
+  const swapPartnerLook = (look: { avatar?: string; style?: string; outfit?: string }) => {
     const app = appRef.current
     const sprite = partnerSprite.current
     if (!app || !sprite) return
     if (look.avatar && partnerAvatarRef.current !== look.avatar && MODEL_URLS[look.avatar]) {
-      // 形象+风格一起换：先同步记录 style（load 时按它重染），单次加载避免双开
+      // 形象+风格+款式一起换：先同步记录 style/outfit（load 时按它们生效），单次加载避免双开
       if (look.style && (OUTFIT_STYLES as any)[look.style]) sprite.style = look.style
+      // V1.5.0：款式属于形象——换形象时款式必须回落 base，否则旧款式的纹理文件名
+      // 撞到新形象的纹理会张冠李戴（applyOutfitVariant 按形象查表，查不到是无害 no-op，
+      // 但 sprite.variant 残留会让后续 applyStyle 的 rectKey 查错）
+      sprite.variant = look.avatar === partnerAvatarRef.current ? sprite.variant : 'base'
+      if (look.outfit && look.outfit !== 'base') {
+        const av = look.avatar ?? partnerAvatarRef.current
+        if (av && OUTFIT_VARIANTS[av]?.some((v) => v.id === look.outfit)) sprite.variant = look.outfit
+      }
       const home = { ...sprite.home }
       partnerAvatarRef.current = look.avatar
       sprite
@@ -767,6 +815,9 @@ export default function App() {
           else sprite.setMood(st.partnerMood ?? 'neutral')
         })
         .catch((e) => console.error('[swap] 对方形象加载失败', e))
+    } else if (look.outfit && look.outfit !== (sprite.variant ?? 'base')) {
+      // 仅换款式：applyVariant 内部按原参数重载（保持位置/可见性/心情）
+      sprite.applyVariant(look.outfit).catch((e) => console.error('[swap] 对方换款式失败', e))
     } else if (look.style) {
       // 仅换风格：applyStyle 内部按原参数重载（保持位置/可见性/心情）
       sprite.applyStyle(look.style).catch((e) => console.error('[swap] 对方换装失败', e))
@@ -993,6 +1044,26 @@ export default function App() {
                   ))}
                 </div>
                 <h4>穿搭</h4>
+                {/* V1.5.0 衣橱 2.0：款式行（整纹理替换，真·换衣服）。
+                    只有配置了 variants 的模型显示（Chitose/Haru）；Hiyori/Natori 条款禁改 → 无此行 */}
+                {(OUTFIT_VARIANTS[me.avatar ?? '']?.length ?? 0) > 0 && (
+                  <div className="wardrobe-row variant-row">
+                    {OUTFIT_VARIANTS[me.avatar ?? '']!.map((v) => (
+                      <button
+                        key={v.id}
+                        className={`style-chip variant-chip ${myOutfit === v.id ? 'active' : ''}`}
+                        style={myOutfit === v.id
+                          ? { borderColor: v.swatch, boxShadow: `0 0 0 3px ${v.swatch}33, 0 0 14px ${v.swatch}44` }
+                          : undefined}
+                        aria-pressed={myOutfit === v.id}
+                        onClick={() => applyVariantLocal(v.id)}
+                      >
+                        <span className="style-emoji">{v.id === 'base' ? '🧷' : '🧢'}</span>
+                        <span className="style-label">{v.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="wardrobe-row">
                   {/* V1.5.0：色板按当前形象性别过滤（无 gender 标记的 = 通用，永远显示） */}
                   {Object.entries(OUTFIT_STYLES).filter(([, p]) => {
@@ -1013,7 +1084,7 @@ export default function App() {
                     </button>
                   ))}
                 </div>
-                <p className="sub tiny">真实换装：服装整体换色，肤色永远不变；会实时同步到 TA 的屏幕上</p>
+                <p className="sub tiny">真实换装：款式整件换 + 颜色随心染，肤色永远不变；会实时同步到 TA 的屏幕上</p>
               </div>
               <div className="panel-card">
                 <button className="btn block" onClick={() => setShowMoodPicker(true)}>

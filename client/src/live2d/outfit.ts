@@ -133,6 +133,88 @@ export function avatarIdFromUrl(url: string): string {
   return m ? m[1] : ''
 }
 
+/**
+ * ─────────────── 衣橱 2.0：款式轴（V1.5.0） ───────────────
+ * 款式 = 整张服装纹理替换（真·换衣服，不是换色）。textures 里没列的纹理沿用原生。
+ * 授权边界（设计文档附录 A）：换款只做在无附加条款的模型上（Chitose/Haru）；
+ * Hiyori/Natori 条款禁止设计变更 → 不给它们 variants，UI 自动隐藏款式行。
+ *
+ * 资产：models/<id>/outfits/<variant>/texture_NN.png（+ .sd.png 半图，LOD 用），
+ * 由 scripts/gen-outfit-variants.mjs 从原生 atlas 程序化生成（改动像素严格限制在服装矩形内）。
+ */
+export interface OutfitVariant {
+  id: string
+  label: string
+  /** UI 款式 chip 小色块 */
+  swatch: string
+  gender: 'm' | 'f'
+  /** { 原纹理文件名 → 变体资产相对 models/<id>/ 的路径 } */
+  textures: Record<string, string>
+}
+
+export const OUTFIT_VARIANTS: Record<string, OutfitVariant[]> = {
+  chitose: [
+    { id: 'base', label: '西装马甲', swatch: '#8d9cb5', gender: 'm', textures: {} },
+    // 墨绿针织毛衣：西装→墨绿针织（带织纹噪点），格纹裤→深灰纯色，领带→琥珀金小点缀
+    { id: 'knit', label: '针织毛衣', swatch: '#2f4f3a', gender: 'm', textures: { 'texture_00.png': 'outfits/knit/texture_00.png' } },
+  ],
+  haru: [
+    { id: 'base', label: '西装裙', swatch: '#6a6f80', gender: 'f', textures: {} },
+    // 水手服：灰西装裙→水手藏青，蓝条纹领巾→正红领巾（水手服经典）
+    { id: 'sailor', label: '水手服', swatch: '#33486e', gender: 'f', textures: { 'texture_01.png': 'outfits/sailor/texture_01.png' } },
+  ],
+}
+
+/** 款式变体结果：replaced=替换的 blobMap 条目数（含 SD 半图）；ownedUrls 需随加载器销毁 revoke */
+export interface VariantResult { replaced: number; ownedUrls: string[] }
+
+/** 变体纹理缓存：同形象同款式只拉取/解码一次（来回切换秒开） */
+const variantCache = new Map<string, string>()
+
+/**
+ * 把 blobMap 中该模型的服装纹理替换为款式变体资产（原位替换，模型加载管线零侵入）。
+ * SD 半图条目（*.sd.png）自动映射到变体资产的 .sd.png（缺文件时该条目保持原生，LOD 兜底）。
+ */
+export async function applyOutfitVariant(
+  blobMap: Record<string, string>,
+  avatarId: string,
+  variantId: string,
+): Promise<VariantResult> {
+  const ownedUrls: string[] = []
+  let replaced = 0
+  if (!variantId || variantId === 'base') return { replaced, ownedUrls }
+  const variant = OUTFIT_VARIANTS[avatarId]?.find((v) => v.id === variantId)
+  if (!variant) return { replaced, ownedUrls }
+  const base2 = (import.meta as any).env?.BASE_URL ?? '/'
+  for (const [rel, url] of Object.entries(blobMap)) {
+    const base = rel.slice(rel.lastIndexOf('/') + 1)
+    const norm = base.replace(/\.sd\./i, '.')
+    const relPath = variant.textures[norm]
+    if (!relPath) continue
+    const isSd = /\.sd\./i.test(base)
+    const assetPath = `${base2}models/${avatarId}/${isSd ? relPath.replace(/\.png$/i, '.sd.png') : relPath}`
+    const cacheKey = `${avatarId}|${variantId}|${base}`
+    try {
+      let outUrl = variantCache.get(cacheKey) ?? null
+      if (!outUrl) {
+        // V1.4.3 教训：SPA fallback 会给不存在的文件返回 200 的 index.html → 必须校验 image/*
+        const r = await fetch(assetPath)
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const ct = r.headers.get('content-type') ?? ''
+        if (!ct.startsWith('image/')) throw new Error(`not image: ${ct}`)
+        outUrl = URL.createObjectURL(await r.blob())
+        variantCache.set(cacheKey, outUrl)
+        ownedUrls.push(outUrl)
+      }
+      blobMap[rel] = outUrl
+      replaced++
+    } catch (e) {
+      console.warn('[outfit] 变体纹理缺失，该纹理保持原生', assetPath, e)
+    }
+  }
+  return { replaced, ownedUrls }
+}
+
 /** 重染结果：replaced=替换的 blobMap 条目数；ownedUrls=本次新建的 blob URL（加载器销毁时需 revoke） */
 export interface RecolorResult { replaced: number; ownedUrls: string[] }
 
@@ -142,23 +224,29 @@ const recolorCache = new Map<string, string>()
 /**
  * 对 blobMap 中该模型的服装纹理做重染，原位替换为新的 Blob URL。
  * 仅当 styleId 非法或为 default 时跳过。worker 直连兜底路径（无 blobMap）不受影响。
+ * @param variantId V1.5.0：款式 id——保护/白名单矩形优先查 `avatar|variant` 复合键
+ *                  （变体与原生服装区域形状一致时无需配置，自动沿用模型级键）
  */
 export async function recolorOutfitTextures(
   blobMap: Record<string, string>,
   avatarId: string,
   styleId: string,
+  variantId = 'base',
 ): Promise<RecolorResult> {
   const style = OUTFIT_STYLES[styleId]
   const texList = OUTFIT_MODEL_TEX[avatarId]
   const ownedUrls: string[] = []
   let replaced = 0
   if (!style || style.strength === 0 && style.satMul === 1 || !texList) return { replaced, ownedUrls }
+  const rectKey = variantId !== 'base' ? `${avatarId}|${variantId}` : avatarId
+  const protectSrc = OUTFIT_PROTECT[rectKey] ?? OUTFIT_PROTECT[avatarId]
+  const allowSrc = OUTFIT_ALLOW[rectKey] ?? OUTFIT_ALLOW[avatarId]
 
   for (const [rel, url] of Object.entries(blobMap)) {
     const base = rel.slice(rel.lastIndexOf('/') + 1)
     const norm = base.replace(/\.sd\./i, '.')
     if (!texList.some((t) => norm === t)) continue
-    const cacheKey = `${avatarId}|${styleId}|${base}`
+    const cacheKey = `${avatarId}|${variantId}|${styleId}|${base}`
     try {
       let outUrl = recolorCache.get(cacheKey) ?? null
       if (!outUrl) {
@@ -172,14 +260,13 @@ export async function recolorOutfitTextures(
         bmp.close?.()
         const img = ctx.getImageData(0, 0, cvs.width, cvs.height)
         // 保护矩形/白名单矩形/肤色阈值换算到当前纹理尺寸（SD 半图按宽度比例缩放）
-        const rects = OUTFIT_PROTECT[avatarId]?.[norm]
+        const rects = protectSrc?.[norm]
         const k = img.width / 2048
         const scaled = rects?.map(({ rect, hairOnly }) => ({
           rect: rect.map((n) => n * k) as [number, number, number, number],
           hairOnly,
         }))
-        const allowRaw = OUTFIT_ALLOW[avatarId]?.[norm]
-        const allow = allowRaw?.map((r) => r.map((n) => n * k) as [number, number, number, number])
+        const allow = allowSrc?.[norm]?.map((r) => r.map((n) => n * k) as [number, number, number, number])
         recolorPixels(img.data, img.width, style, scaled, avatarId, allow)
         ctx.putImageData(img, 0, 0)
         const out: Blob = await (cvs as OffscreenCanvas).convertToBlob({ type: 'image/png' })

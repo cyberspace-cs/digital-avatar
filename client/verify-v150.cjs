@@ -69,11 +69,12 @@ const SHOTS = path.join(__dirname, 'shots')
   console.log('T1 SWITCH:', JSON.stringify(t1))
   await pa.screenshot({ path: path.join(SHOTS, 'v150-chitose-default.png') })
 
-  // ---- T2: 男色板可见性（Chitose 应显示 军绿/藏青/炭灰，无 樱花粉） ----
+  // ---- T2: 男色板可见性（Chitose：row0=形象 row1=款式 row2=色板；应显示 军绿/藏青/炭灰，无 樱花粉） ----
   const t2 = await chipLabels(pa)
   console.log('T2 FEMALE→MALE rows:', JSON.stringify(t2))
-  const hasMale = t2[1]?.some((l) => ['军绿', '藏青', '炭灰'].some((k) => l.includes(k)))
-  const noFemale = !t2[1]?.some((l) => ['樱花粉', '海盐蓝', '元气橙', '暗夜紫'].some((k) => l.includes(k)))
+  const paletteRow = t2[2] ?? t2[1] ?? []
+  const hasMale = paletteRow.some((l) => ['军绿', '藏青', '炭灰'].some((k) => l.includes(k)))
+  const noFemale = !paletteRow.some((l) => ['樱花粉', '海盐蓝', '元气橙', '暗夜紫'].some((k) => l.includes(k)))
   console.log('T2 RESULT: malePalette=', hasMale, 'femaleHidden=', noFemale)
 
   // ---- T3: 藏青换色（重染管线 + 白名单矩形） ----
@@ -125,6 +126,68 @@ const SHOTS = path.join(__dirname, 'shots')
   await openWardrobe(pa)
   const t6 = await pa.evaluate(() => document.body.textContent.includes('This content uses sample data owned and copyrighted by Live2D Inc.'))
   console.log('T6 COPYRIGHT_NOTICE:', t6)
+
+  // ---- T7: 款式行（衣橱 2.0）——Chitose 显示 西装马甲/针织毛衣，点毛衣整纹理替换 ----
+  const t7rows = await chipLabels(pa)
+  console.log('T7 VARIANT_ROW:', JSON.stringify(t7rows[0]))
+  await pa.evaluate(() => {
+    ;[...document.querySelectorAll('.style-chip')].find((b) => b.textContent.includes('针织毛衣'))?.click()
+  })
+  await new Promise((r) => setTimeout(r, 5000))
+  const t7 = await pa.evaluate(() => ({
+    outfit: localStorage.getItem('da_outfit'),
+    hasModel: !!window.__pixi.meS.model,
+  }))
+  console.log('T7 KNIT:', JSON.stringify(t7))
+  await pa.evaluate(() => document.querySelectorAll('.tabbar .tab')[0]?.click())
+  await new Promise((r) => setTimeout(r, 1200))
+  await pa.screenshot({ path: path.join(SHOTS, 'v150-chitose-knit.png') })
+
+  // ---- T8: 款式×颜色组合（毛衣 + 炭灰） ----
+  await openWardrobe(pa)
+  await pa.evaluate(() => {
+    ;[...document.querySelectorAll('.style-chip')].find((b) => b.textContent.includes('炭灰'))?.click()
+  })
+  await new Promise((r) => setTimeout(r, 5000))
+  const t8 = await pa.evaluate(() => ({
+    style: localStorage.getItem('da_style'),
+    outfit: localStorage.getItem('da_outfit'),
+    hasModel: !!window.__pixi.meS.model,
+  }))
+  console.log('T8 KNIT+CHARCOAL:', JSON.stringify(t8))
+  await pa.evaluate(() => document.querySelectorAll('.tabbar .tab')[0]?.click())
+  await new Promise((r) => setTimeout(r, 1200))
+  await pa.screenshot({ path: path.join(SHOTS, 'v150-chitose-knit-charcoal.png') })
+
+  // ---- T9: 款式持久化（服务端 outfit 列） ----
+  const t9 = await pa.evaluate(async (uid) => {
+    const r = await (await fetch('/digital-avatar/api/state/' + uid)).json()
+    return { serverOutfit: r.outfit, serverStyle: r.style, serverAvatar: r.avatar }
+  }, A.id)
+  console.log('T9 SERVER_STATE:', JSON.stringify(t9))
+
+  // ---- T10: Haru 水手服（女款变体整链路） ----
+  await openWardrobe(pa)
+  await pa.evaluate(() => {
+    ;[...document.querySelectorAll('.style-chip')].find((b) => b.textContent.includes('Haru'))?.click()
+  })
+  await new Promise((r) => setTimeout(r, 5000))
+  // 换形象后款式应回落 base，款式行变为 Haru 的
+  const t10rows = await chipLabels(pa)
+  console.log('T10 HARU_ROWS:', JSON.stringify(t10rows[0]), '| style row:', JSON.stringify(t10rows[1]))
+  await pa.evaluate(() => {
+    ;[...document.querySelectorAll('.style-chip')].find((b) => b.textContent.includes('水手服'))?.click()
+  })
+  await new Promise((r) => setTimeout(r, 5000))
+  const t10 = await pa.evaluate(() => ({
+    avatar: JSON.parse(localStorage.getItem('da_me')).avatar,
+    outfit: localStorage.getItem('da_outfit'),
+    hasModel: !!window.__pixi.meS.model,
+  }))
+  console.log('T10 SAILOR:', JSON.stringify(t10))
+  await pa.evaluate(() => document.querySelectorAll('.tabbar .tab')[0]?.click())
+  await new Promise((r) => setTimeout(r, 1200))
+  await pa.screenshot({ path: path.join(SHOTS, 'v150-haru-sailor.png') })
 
   console.log('CONSOLE_ERRORS:', JSON.stringify(errors.slice(0, 8)))
   await browser.close()

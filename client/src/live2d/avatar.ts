@@ -2,7 +2,7 @@ import * as PIXI from 'pixi.js'
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4'
 import type { Mood } from '../types'
 import { type QualityTier } from './perf'
-import { OUTFIT_STYLES, avatarIdFromUrl, recolorOutfitTextures } from './outfit'
+import { OUTFIT_STYLES, OUTFIT_VARIANTS, avatarIdFromUrl, recolorOutfitTextures, applyOutfitVariant } from './outfit'
 
 // Live2DFactory 在 cubism4 模块内导出（不挂 window / Live2DModel.constructor），
 // 这里动态 import 拿到模块命名空间，在运行时挂中间件。
@@ -155,7 +155,7 @@ const MOOD_PARAM_TAU = 120
  *       V1.4.0 纹理级选择性重上色：服装像素换色、肤色像素零改动（实现见 outfit.ts）。
  * 这里只保留 UI 需要的 label/swatch（完整定义在 outfit.ts，re-export 兼容旧引用）。
  */
-export { OUTFIT_STYLES } from './outfit'
+export { OUTFIT_STYLES, OUTFIT_VARIANTS } from './outfit'
 
 export class AvatarSprite {
   model: Live2DModel | null = null
@@ -163,6 +163,8 @@ export class AvatarSprite {
   target = { x: 0, y: 0 }
   mood: Mood = 'neutral'
   style = 'default'
+  /** 衣橱 2.0：款式（'base' = 原生；非 base 时 load 前先整纹理替换再重染上色） */
+  variant = 'base'
   lerpSpeed = 0.06
   private _returning = false
   private _worker: Worker | null = null
@@ -301,10 +303,15 @@ export class AvatarSprite {
       // V1.4.0 真实换装：非 default 风格 → 对服装纹理做选择性重染（肤色像素零改动），
       // 原位替换 blobMap 中的纹理条目，模型加载管线零侵入
       try {
+        // V1.5.0 衣橱 2.0：款式先行（整纹理替换），随后重染在其上换色（款式×颜色双轴）
+        const va = await applyOutfitVariant(result.blobMap ?? {}, avatarIdFromUrl(url), this.variant)
+        this._blobUrls.push(...va.ownedUrls)
+        if (va.replaced) console.info(`[outfit] variant=${this.variant} 替换 ${va.replaced} 张纹理`)
         const { replaced, ownedUrls } = await recolorOutfitTextures(
           result.blobMap ?? {},
           avatarIdFromUrl(url),
           this.style,
+          this.variant,
         )
         this._blobUrls.push(...ownedUrls)
         if (replaced) console.info(`[outfit] style=${this.style} 重染 ${replaced} 张纹理`)
@@ -398,6 +405,29 @@ export class AvatarSprite {
     if (this.model) { this.model.x = px; this.model.y = py; this.model.visible = pv }
     this.setMood(this.mood)
     return true
+  }
+
+  /**
+   * 应用款式（V1.5.0 衣橱 2.0）：整张服装纹理替换，需重载模型（同 applyStyle 通道）。
+   * 'base' = 回到原生。模型未加载时仅记录，load 时自动生效。
+   */
+  async applyVariant(variantId: string): Promise<boolean> {
+    const next = variantId === 'base' || OUTFIT_VARIANTS[this._avatarId()]?.some((v) => v.id === variantId)
+      ? variantId : 'base'
+    const prev = this.variant
+    this.variant = next
+    if (next === prev || !this.model || !this._container || !this._lastLoad) return false
+    const { container, url, scale, tier } = this._lastLoad
+    const px = this.model.x, py = this.model.y, pv = this.model.visible
+    await this.swap(container, url, scale, tier)
+    if (this.model) { this.model.x = px; this.model.y = py; this.model.visible = pv }
+    this.setMood(this.mood)
+    return true
+  }
+
+  /** 当前加载模型的形象 id（applyVariant 校验变体合法性用） */
+  private _avatarId(): string {
+    return this._lastLoad ? avatarIdFromUrl(this._lastLoad.url) : ''
   }
 
   /** 把 MOOD_PARAMS 解析成参数下标（跳过模型不存在的参数），挂 beforeModelUpdate 驱动 */
