@@ -59,6 +59,10 @@ CREATE INDEX IF NOT EXISTS idx_growth_events_bond_day ON growth_events(bond_id, 
 // ---------- V1.3 换装迁移（幂等）：users 加 style 列（穿搭风格） ----------
 try { db.exec('ALTER TABLE users ADD COLUMN style TEXT DEFAULT \'default\';') } catch (_e) { /* 列已存在 */ }
 
+// ---------- V1.5.0 形象迁移（幂等）：Mark（卡通小孩+禁美男条款）→ Chitose（官方男模） ----------
+// 新用户初始分配不会再抽到 mark，老用户首次登录时这里把 avatar 一并纠正。
+try { db.prepare(`UPDATE users SET avatar = 'chitose' WHERE avatar = 'mark'`).run() } catch (_e) { /* 表未就绪 */ }
+
 export const q = {
   insertUser: db.prepare('INSERT INTO users (id, name, avatar) VALUES (?, ?, ?)'),
   getUser: db.prepare('SELECT * FROM users WHERE id = ?'),

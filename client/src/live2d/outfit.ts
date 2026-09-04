@@ -27,15 +27,21 @@ export interface OutfitStyle {
   strength: number
   /** UI 色板色 */
   swatch: string
+  /** 性别向色板（V1.5.0）：'m' 只在男模显示，'f' 只在女模显示，缺省 = 通用 */
+  gender?: 'm' | 'f'
 }
 
 export const OUTFIT_STYLES: Record<string, OutfitStyle> = {
   default: { label: '原生', hue: 0, satMul: 1, valMul: 1, strength: 0, swatch: '#c9c9d6' },
-  sakura: { label: '樱花粉', hue: 335, satMul: 1.05, valMul: 1, strength: 0.85, swatch: '#f59ec4' },
-  ocean: { label: '海盐蓝', hue: 208, satMul: 1, valMul: 1, strength: 0.85, swatch: '#6cc3ff' },
-  sunset: { label: '元气橙', hue: 22, satMul: 1.15, valMul: 1, strength: 0.85, swatch: '#ffb26b' },
-  night: { label: '暗夜紫', hue: 268, satMul: 0.95, valMul: 0.95, strength: 0.85, swatch: '#a78bfa' },
+  sakura: { label: '樱花粉', hue: 335, satMul: 1.05, valMul: 1, strength: 0.85, swatch: '#f59ec4', gender: 'f' },
+  ocean: { label: '海盐蓝', hue: 208, satMul: 1, valMul: 1, strength: 0.85, swatch: '#6cc3ff', gender: 'f' },
+  sunset: { label: '元气橙', hue: 22, satMul: 1.15, valMul: 1, strength: 0.85, swatch: '#ffb26b', gender: 'f' },
+  night: { label: '暗夜紫', hue: 268, satMul: 0.95, valMul: 0.95, strength: 0.85, swatch: '#a78bfa', gender: 'f' },
   mono: { label: '胶片黑白', hue: 0, satMul: 0.06, valMul: 1, strength: 0, swatch: '#e8e8e8' },
+  // V1.5.0 男色板：军绿 / 藏青 / 炭灰（女生界面不显示）
+  olive: { label: '军绿', hue: 95, satMul: 0.9, valMul: 0.92, strength: 0.85, swatch: '#7d8f5a', gender: 'm' },
+  navy: { label: '藏青', hue: 222, satMul: 1.1, valMul: 0.82, strength: 0.85, swatch: '#4a6b9c', gender: 'm' },
+  charcoal: { label: '炭灰', hue: 220, satMul: 0.22, valMul: 0.88, strength: 0.85, swatch: '#5c616e', gender: 'm' },
 }
 
 /**
@@ -49,9 +55,8 @@ const OUTFIT_MODEL_TEX: Record<string, string[]> = {
   hiyori: ['texture_01.png'],
   natori: ['texture_00.png'],
   haru: ['texture_01.png'],
-  // V1.4.3 新增男模 Mark：单 atlas 全混排（发丝/袖子包围盒互相重叠），
-  // 否列矩形护不住 → 用白名单矩形（只染矩形内的像素）
-  mark: ['texture_00.png'],
+  // V1.5.0 新增男模 Chitose：单 atlas 全混排（西装/领带/格裤/腿 + 脸/发/手同图）
+  chitose: ['texture_00.png'],
 }
 
 /** 保护矩形（atlas 像素坐标，2048 原图基准；SD 半图按 img.width/2048 缩放） */
@@ -91,16 +96,18 @@ const OUTFIT_PROTECT: Record<string, Record<string, ProtectRect[]>> = {
 }
 
 /**
- * 白名单矩形（V1.4.3，Mark 专用）：有此项时【只有矩形内的像素】参与重染。
- * Mark 的红色卫衣袖与棕色发丝在 atlas 上包围盒互相重叠，否列矩形怎么切都会把
- * 染色切一半留一半（花斑）→ 反过来只圈服装：两条袖子 + 卫衣/背带裤本体。
+ * 白名单矩形（V1.4.3 起用于单 atlas 全混排的男模）：有此项时【只有矩形内的像素】参与重染。
+ *
+ * Chitose（V1.5.0，2048 atlas 实拍标定，坐标 ÷2 即预览图 1024 基准）：
+ * 棕发与脸/手全在矩形外天然安全；红领带的暗部会撞通用唇色保护带 → SKIN_RULE.lip=false。
  */
 const OUTFIT_ALLOW: Record<string, Record<string, [number, number, number, number][]>> = {
-  mark: {
+  chitose: {
     'texture_00.png': [
-      [1240, 170, 260, 430], // 左袖（红）
-      [1180, 700, 220, 430], // 右袖（红）
-      [760, 1700, 510, 320], // 卫衣 + 蓝色背带裤
+      [20, 1050, 550, 970], // 西装外套 + 领口 + 红领带
+      [566, 1676, 420, 344], // 格纹长裤
+      [596, 1540, 360, 110], // 鞋（浅色 + 深色两只）
+      [1030, 1030, 580, 1000], // 右侧裤腿/袖件组
     ],
   },
 }
@@ -109,14 +116,15 @@ const OUTFIT_ALLOW: Record<string, Record<string, [number, number, number, numbe
  * 每模型肤色掩码阈值。
  * Hiyori 皮肤/开衫同为奶油色（h25-45），阈值 42 恰好切在腿部高光 h43-44 上 → 粉色花斑；
  * 实测放宽到 h≤48、s≤0.5 后皮肤全保护、深色服装不受影响。
- * lip=false（Mark）：红色卫衣的暗部 (h≈355, s0.6, v0.7) 会撞上通用唇色保护带 → 整件衣服染花，
- * Mark 的嘴是独立粉色块且不在服装矩形内，关闭唇色带无副作用。
+ * lip=false（Chitose）：红领带的暗部 (h≈355, s0.6, v0.7) 会撞上通用唇色保护带 → 整件衣服染花，
+ * Chitose 的嘴是独立色块且不在服装白名单矩形内，关闭唇色带无副作用。
  */
 const SKIN_RULE: Record<string, { warmHue: number; warmSat: number; lip: boolean }> = {
   hiyori: { warmHue: 48, warmSat: 0.5, lip: true },
   natori: { warmHue: 42, warmSat: 0.42, lip: true },
   haru: { warmHue: 42, warmSat: 0.42, lip: true },
-  mark: { warmHue: 42, warmSat: 0.42, lip: false },
+  // chitose：红领带暗部 (h≈355) 会撞唇色保护带 → 关闭（嘴在矩形外，无副作用）
+  chitose: { warmHue: 42, warmSat: 0.42, lip: false },
 }
 
 /** 从模型 URL 解析形象 id（…/models/<id>/<Name>.model3.json） */

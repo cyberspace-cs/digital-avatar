@@ -1,0 +1,80 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "chitose.moc3",
+		"Textures": [
+			"chitose.2048/texture_00.png"
+		],
+		"Physics": "chitose.physics3.json",
+		"Pose": "chitose.pose3.json",
+		"DisplayInfo": "chitose.cdi3.json",
+		"Expressions": [
+				{
+						"Name": "Angry",
+						"File": "expressions/Angry.exp3.json"
+				},
+				{
+						"Name": "Blushing",
+						"File": "expressions/Blushing.exp3.json"
+				},
+				{
+						"Name": "f01",
+						"File": "expressions/f01.exp3.json"
+				},
+				{
+						"Name": "Normal",
+						"File": "expressions/Normal.exp3.json"
+				},
+				{
+						"Name": "Sad",
+						"File": "expressions/Sad.exp3.json"
+				},
+				{
+						"Name": "Smile",
+						"File": "expressions/Smile.exp3.json"
+				},
+				{
+						"Name": "Surprised",
+						"File": "expressions/Surprised.exp3.json"
+				}
+		],
+		"Motions": {
+				"Flick": [
+						{
+								"File": "motion/chitose_handwave.motion3.json"
+						}
+				],
+				"Idle": [
+						{
+								"File": "motion/chitose_idle.motion3.json"
+						}
+				],
+				"TapBody": [
+						{
+								"File": "motion/chitose_kime01.motion3.json"
+						},
+						{
+								"File": "motion/chitose_kime02.motion3.json"
+						}
+				]
+		}
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": [
+				"PARAM_MOUTH_OPEN_Y"
+			]
+		},
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": [
+				"PARAM_EYE_L_OPEN",
+				"PARAM_EYE_R_OPEN"
+			]
+		}
+	],
+	"HitAreas": []
+}

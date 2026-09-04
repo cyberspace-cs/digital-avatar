@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
 import './pixi-setup'
 import { AvatarSprite, OUTFIT_STYLES } from './live2d/avatar'
-import { AVATAR_LIBRARY, AVATAR_LABELS, MODEL_URLS, DEFAULT_AVATAR } from './live2d/models'
+import { AVATAR_LIBRARY, AVATAR_LABELS, AVATAR_GENDER, MODEL_URLS, DEFAULT_AVATAR } from './live2d/models'
 import { PerfGovernor } from './live2d/perf'
 import type { QualityTier } from './live2d/perf'
 import { api } from './api'
@@ -13,7 +13,7 @@ import type { BondMeta, InteractionEvent, Mood, QuestItem, User, Visibility } fr
 // V1.3.2 形象库配置化：见 live2d/models.ts，新增形象只改 models.ts 一处
 const MODEL_SCALE = 0.12
 // 形象按钮 emoji（衣橱芯片用）
-const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', haru: '📚', natori: '🌙', mark: '☀️' }
+const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', haru: '📚', natori: '🌙', chitose: '🧥' }
 
 type MenuPos = { x: number; y: number; target: 'me' | 'partner' } | null
 type Tab = 'companion' | 'quests' | 'records' | 'me'
@@ -143,8 +143,13 @@ export default function App() {
     const invite = url.searchParams.get('invite')
     if (saved) {
       const u = JSON.parse(saved)
-      meAvatarRef.current = u.avatar ?? 'hiyori'
-      setMe(u)
+      // V1.5.0：形象库里没有的 id（如已移除的 mark）一律回退默认形象，避免加载失败
+      meAvatarRef.current = (u.avatar && MODEL_URLS[u.avatar] ? u.avatar : null) ?? DEFAULT_AVATAR
+      const nu = { ...u, avatar: meAvatarRef.current }
+      setMe(nu)
+      if (meAvatarRef.current !== u.avatar) {
+        localStorage.setItem('da_me', JSON.stringify(nu))
+      }
       // V1.3 换装：向服务端对齐形象与穿搭（localStorage 里可能没有 style 列）
       api.getState(u.id).then((r) => {
         // V1.4.0：服务端 style 与本地持久化不一致时才重载模型（一致则初始加载已带风格，零额外开销）
@@ -720,6 +725,11 @@ export default function App() {
     localStorage.setItem('da_me', JSON.stringify(nu))
     api.setLook(me.id, { avatar: key }).catch(() => {})
     emit('state_update', { userId: me.id, avatar: key })
+    // V1.5.0：换形象后若当前穿搭色板不属于新形象的性别（如女款粉 → 男模），
+    // 自动回落"原生"，避免 UI 里选不回已隐藏的女款
+    const st = OUTFIT_STYLES[myStyle]
+    const g = AVATAR_GENDER[key] ?? 'f'
+    if (st?.gender && st.gender !== g) void applyStyleLocal('default')
     setToast(`已换上 ${AVATAR_LABELS[key] ?? key}`)
   }
 
@@ -984,7 +994,11 @@ export default function App() {
                 </div>
                 <h4>穿搭</h4>
                 <div className="wardrobe-row">
-                  {Object.entries(OUTFIT_STYLES).map(([id, p]) => (
+                  {/* V1.5.0：色板按当前形象性别过滤（无 gender 标记的 = 通用，永远显示） */}
+                  {Object.entries(OUTFIT_STYLES).filter(([, p]) => {
+                    const g = AVATAR_GENDER[me.avatar ?? DEFAULT_AVATAR] ?? 'f'
+                    return !p.gender || p.gender === g
+                  }).map(([id, p]) => (
                     <button
                       key={id}
                       className={`style-chip ${myStyle === id ? 'active' : ''}`}
@@ -1018,7 +1032,11 @@ export default function App() {
                   🐱 桌宠模式（悬浮小人）
                 </button>
               </div>
-              <p className="sub center tiny">数字分身 V1.3.2 · 触控重构 + 形象库</p>
+              {/* V1.5.0：Live2D 官方条款要求的版权声明（Free Material License） */}
+              <p className="sub center tiny">
+                数字分身 V1.5.0 · Chitose 形象升级 + 性别化衣橱<br />
+                This content uses sample data owned and copyrighted by Live2D Inc.
+              </p>
             </div>
           )}
 

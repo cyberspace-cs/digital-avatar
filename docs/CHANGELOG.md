@@ -2,6 +2,41 @@
 
 > 约定：每次文档/功能迭代，在此追加一条记录；文档改动同时在 `versions/` 存一份带时间戳的不可变副本。
 
+## [V1.5.0] 2026-09-05（master）—— Chitose 形象升级 + 性别化衣橱（Phase A）
+
+> 用户反馈："阳光少年的模型太傻了，搜索更帅的；换装的话男生女生的模型穿搭不一样，需要详细设计，上网搜索"。设计文档：[2026-09-05-male-model-wardrobe-v2-design.md](./superpowers/specs/2026-09-05-male-model-wardrobe-v2-design.md)。
+
+### 1. 授权调研（官方条款逐个核实，见设计文档附录 A）
+- **Mark-kun 条款明文禁止"改绘成美男"**，且形象偏卡通小孩 → 整体移除
+- **Hiyori/Miara 条款禁止一切设计变更**、**Natori（合作角色）禁改动+禁商用** → 换色按钮保留（个人非商用低风险），但换款式（纹理重绘）只做在无附加条款的模型上（Chitose/Haru）
+- Ren Foster（Cubism 5.3 专属特性）与当前 Cubism 4 运行时不兼容 → 排除；选定 **Chitose**（官方"male model"，棕发衬衫马甲青年，无附加条款）
+
+### 2. 形象库：Mark → Chitose
+- 资产：官方 sample zip → [public/models/chitose/](../client/public/models/chitose/)（moc3/物理/pose/7 表情/4 动作），WebP + SD LOD 已构建
+- [chitose.model3.json](../client/public/models/chitose/chitose.model3.json)：动作组 `Tap`→`TapBody`（对齐 ACTION_MOTIONS），表情 Name 去后缀（对齐 MOOD_RULES 的 'Smile'/'Sad'/'Angry'）
+- [models.ts](../client/src/live2d/models.ts)：`AVATAR_LIBRARY` 加 `gender` 字段；两男两女 = Chitose·温柔青年 + Natori·西装青年 / Hiyori·元气少女 + Haru·文静少女
+- 迁移双保险：服务端 [db.js](../server/src/db.js) 启动时幂等 `UPDATE users SET avatar='chitose' WHERE avatar='mark'`；客户端 [App.tsx](../client/src/App.tsx) 对 localStorage 残留的未知形象 id 回退默认形象
+- Mark 模型资产已删除
+
+### 3. 性别化衣橱（Phase A：色板分性别）
+- [outfit.ts](../client/src/live2d/outfit.ts)：`OUTFIT_STYLES` 加 `gender` 标记；新增男色板 **军绿 / 藏青 / 炭灰**
+- Chitose 换色校准：`OUTFIT_ALLOW` 白名单矩形 4 块（西装+领带 / 格纹裤 / 鞋 / 右侧裤腿组，2048 atlas 实拍标定）；红领带暗部撞唇色保护带 → `SKIN_RULE.lip=false`
+- [App.tsx](../client/src/App.tsx)：衣橱色板按当前形象性别过滤；换形象后若色板性别不符自动回落"原生"
+- 页脚新增 Live2D 官方条款要求的版权声明（Free Material License）
+
+### 4. 验证（[verify-v150.cjs](../client/verify-v150.cjs) 全绿，零 console 错误）
+- T1 切换 Chitose：prefetch 16 entries → 模型加载成功
+- T2 性别过滤：Chitose 显示 军绿/藏青/炭灰，女款四色隐藏 ✅
+- T3 藏青换色：重染管线正常、模型完好
+- T4 喂食反馈：气泡「请你吃蛋糕 🧁」+ 动作播放（TapBody 组）✅
+- T5 mark 残留迁移：localStorage 'mark' → 回退默认 → 服务端权威纠正 ✅
+- T6 版权声明出现 ✅
+- 截图目检：原生（藏青西装红领带）/ 藏青 / 军绿 三套换色正确，头发/脸/肤色零改动，格纹保留
+
+### 5. 后续（Phase B/C，见设计文档 §5）
+- 款式轴（整纹理热替换）：Chitose 连帽卫衣/休闲衬衫、Haru 水手服/连衣裙
+- atlas 像素 diff 校验脚本、E2E 扩充、部署
+
 ## [V1.4.3] 2026-09-05（master）—— 桌宠模式 + 两男两女形象库 + 互动无回应四连根因修复
 
 > 用户反馈："重构成桌面 live2D 的小人 codex 桌宠；穿搭换装颜色不对；阳光少年的模型是少女，整四个模型两男两女；喂食/送花/摸头没有回应或状态不更新"。本轮 loop engineering 用"探针隔离取证 → DB 反推 → 修复 → E2E 全绿"循环收尾。

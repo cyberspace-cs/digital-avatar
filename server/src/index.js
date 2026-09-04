@@ -22,8 +22,9 @@ app.post('/api/identity', (req, res) => {
   const { name } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'name required' })
   const id = uuid()
-  // V1.3.2：创建时随机分配一个形象（形象库见 client/src/live2d/models.ts，V1.4.3 两男两女）
-  const INITIAL_AVATARS = ['hiyori', 'haru', 'natori', 'mark']
+  // V1.3.2：创建时随机分配一个形象（形象库见 client/src/live2d/models.ts）。
+  // V1.5.0：mark → chitose（Mark 卡通小孩 + 条款禁改绘美男，已整体移除）
+  const INITIAL_AVATARS = ['hiyori', 'haru', 'natori', 'chitose']
   const avatar = INITIAL_AVATARS[Math.floor(Math.random() * INITIAL_AVATARS.length)]
   q.insertUser.run(id, name.trim(), avatar)
   res.json({ user: q.getUser.get(id) })
