@@ -7,6 +7,13 @@ import { q, uuid } from './db.js'
 const app = express()
 app.use(cors())
 app.use(express.json())
+// 项目规约：API 始终返回 200 JSON——body JSON 解析失败也不走 express 默认 HTML 400
+app.use((err, _req, res, next) => {
+  if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+    return res.json({ error: 'bad_json' })
+  }
+  next(err)
+})
 
 const online = new Map() // userId -> socketId
 
@@ -15,8 +22,8 @@ app.post('/api/identity', (req, res) => {
   const { name } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'name required' })
   const id = uuid()
-  // V1.3.2：创建时随机分配一个形象（形象库见 client/src/live2d/models.ts）
-  const INITIAL_AVATARS = ['hiyori', 'natori', 'haru']
+  // V1.3.2：创建时随机分配一个形象（形象库见 client/src/live2d/models.ts，V1.4.3 两男两女）
+  const INITIAL_AVATARS = ['hiyori', 'haru', 'natori', 'mark']
   const avatar = INITIAL_AVATARS[Math.floor(Math.random() * INITIAL_AVATARS.length)]
   q.insertUser.run(id, name.trim(), avatar)
   res.json({ user: q.getUser.get(id) })
@@ -42,7 +49,7 @@ app.post('/api/invite/:code/accept', (req, res) => {
   const inviterUser = q.getUser.get(inviter)
   if (!inviterUser || !q.getUser.get(userId))
     return res.status(404).json({ error: 'user not found' })
-  if (!q.getBond.get(inviter, userId, inviter, userId)) {
+  if (!q.getBond.get(inviter, userId, userId, inviter)) {
     // V1.3.2 一人一伴：任一方已与其他人绑定则拒绝（否则会产生多条 bond，
     // getPartner 永远返回旧对象，表现为"邀请链接没用"）
     const b1 = q.bondsOf.get(inviter, inviter)
@@ -173,6 +180,109 @@ app.get('/api/quests/:userId', (req, res) => {
   res.json({ quests, streak: bond.streak ?? 0, lastActiveDay: bond.last_active_day, cold: bond.last_active_day !== day })
 })
 
+// ---------- V1.4.3 互动结算（Socket 与 REST 双链路共用，幂等） ----------
+// V1.4.2 的问题：火花结算只走 Socket.IO。WS 断线（生产日志反复出现 ECONNRESET）时
+// 互动静默丢失 → "喂食/送花/摸头没有回应，火花也不涨"。现在：
+//  - 客户端为每次互动生成 eventId（uuid），两条链路共用，按 events.id 去重，绝不重复结算；
+//  - Socket 在线即实时播放；REST 兜底保证落库与火花结算必达。
+function settleInteraction({ senderId, receiverId, action, message, eventId } = {}) {
+  if (!senderId || !receiverId || !action) return null
+  const id = eventId || uuid()
+  // 幂等去重：同 eventId 的互动只结算一次
+  if (q.getEvent.get(id)) {
+    return { event: q.getEvent.get(id), growth: null, duplicate: true }
+  }
+
+  // 状态快照：接收方当前状态（互动后发现的关键）
+  const receiverState = q.getState.get(receiverId)
+  const stateSnapshot =
+    receiverState && receiverState.mood !== 'neutral'
+      ? JSON.stringify({ mood: receiverState.mood, visibility: receiverState.visibility })
+      : null
+
+  q.insertEvent.run(id, senderId, receiverId, action, message ?? null, stateSnapshot)
+  const event = {
+    id,
+    senderId,
+    receiverId,
+    action,
+    message: message ?? null,
+    stateSnapshot,
+    status: 'delivered',
+    createdAt: new Date().toLocaleString('sv-SE').replace('T', ' '),
+  }
+
+  // ---- 火花结算（服务端权威）----
+  let growth = null
+  try {
+    // 双向传参（x,y,y,x）：无论谁发起都能命中同一条 bond
+    const bond = q.getBond.get(senderId, receiverId, receiverId, senderId)
+    if (bond) {
+      const day = todayStr()
+      const before = levelOf(bond.growth ?? 0)
+
+      // streak：今天首次互动 → 连续 +1；断档 → 重置为 1
+      let streak = bond.streak ?? 0
+      if (bond.last_active_day !== day) {
+        streak = bond.last_active_day === yesterdayStr() ? streak + 1 : 1
+      }
+
+      // 火花增量：按当日 reason 计数做软上限
+      const reasonKey = action === 'feed' || action === 'flower' ? action : 'interaction'
+      const rule = SPARK_RULES[reasonKey]
+      let delta = 0
+      const used = q.growthCountsOfDay.all(bond.id, day).find((r) => r.reason === reasonKey)?.n ?? 0
+      if (rule && used < rule.capTimes) delta = rule.delta
+
+      // 每日任务奖励（判重：quest:<id>:<day> 每天只发一次）
+      let questDelta = 0
+      const counts = questCountsToday(bond, day)
+      for (const t of QUESTS) {
+        if ((counts[t.id] ?? 0) >= t.target && !q.growthEventExists.get(bond.id, `quest:${t.id}:${day}`)) {
+          q.insertGrowthEvent.run(uuid(), bond.id, t.reward, `quest:${t.id}:${day}`, day)
+          questDelta += t.reward
+        }
+      }
+
+      if (delta > 0) q.insertGrowthEvent.run(uuid(), bond.id, delta, reasonKey, day)
+      growth = (bond.growth ?? 0) + delta + questDelta
+      q.updateBondGrowth.run(growth, streak, day, bond.id)
+
+      const after = levelOf(growth)
+      growth = {
+        bond: { ...bondMeta({ ...bond, growth, streak, last_active_day: day }), growth, ...after },
+        delta: delta + questDelta,
+        leveledUp: after.level > before.level,
+      }
+    }
+  } catch (err) {
+    console.error('[digital-avatar] growth settlement failed:', err)
+    growth = null
+  }
+  return { event, growth, duplicate: false }
+}
+
+// REST 兜底：WS 断线时互动从这里落库 + 结算（按项目规约始终 200）。
+// V1.4.3 修复：结算后必须把事件推给接收方（原实现只返回 HTTP 响应，
+// 发送端 WS 半开时走兜底 → 火花涨了但对方永远看不到反应 = "喂食/送花没回应"）。
+app.post('/api/interact', (req, res) => {
+  const out = settleInteraction(req.body)
+  if (!out) return res.json({ error: 'senderId/receiverId/action required', event: null, growth: null })
+  const { event, growth } = out
+  // 实时补推：接收方在线就补播（发送端自己已有本地反馈，不再自回声）
+  if (event && !out.duplicate) {
+    const sock = online.get(event.receiverId)
+    if (sock) io.to(sock).emit('interaction', event)
+    if (growth) {
+      const s1 = online.get(event.senderId)
+      const s2 = online.get(event.receiverId)
+      if (s1) io.to(s1).emit('growth_update', growth)
+      if (s2) io.to(s2).emit('growth_update', growth)
+    }
+  }
+  res.json(out)
+})
+
 // ---------- Socket.IO ----------
 const server = http.createServer(app)
 const io = new Server(server, { cors: { origin: '*' } })
@@ -194,85 +304,27 @@ io.on('connection', (socket) => {
   }
 
   socket.on('interaction', (payload) => {
-    const { senderId, receiverId, action, message } = payload ?? {}
-    if (!senderId || !receiverId || !action) return
-    // 状态快照：接收方当前状态（互动后发现的关键）
-    const receiverState = q.getState.get(receiverId)
-    const stateSnapshot =
-      receiverState && receiverState.mood !== 'neutral'
-        ? JSON.stringify({ mood: receiverState.mood, visibility: receiverState.visibility })
-        : null
-
-    const id = uuid()
-    q.insertEvent.run(id, senderId, receiverId, action, message ?? null, stateSnapshot)
-    const event = {
-      id,
-      senderId,
-      receiverId,
-      action,
-      message: message ?? null,
-      stateSnapshot,
-      status: 'delivered',
-      createdAt: new Date().toLocaleString('sv-SE').replace('T', ' '),
-    }
+    const out = settleInteraction(payload)
+    if (!out) return
+    const { event, growth } = out
+    const { senderId, receiverId } = event
     // 推给接收方；若不在线则落库待回看
     const sock = online.get(receiverId)
     if (sock) {
       io.to(sock).emit('interaction', event)
-      socket.emit('interaction_ack', { ...event, status: 'played' })
+      socket.emit('interaction_ack', { ...event, status: 'played', growth })
     } else {
-      socket.emit('interaction_ack', event)
+      socket.emit('interaction_ack', { ...event, growth })
     }
     // 记录进发送方时间线
     socket.emit('interaction', { ...event, senderId, self: true })
 
-    // ---- V1.2 火花结算（服务端权威；失败不阻塞互动播放）----
-    try {
-      const bond = q.getBond.get(senderId, receiverId, senderId, receiverId)
-      if (bond) {
-        const day = todayStr()
-        const before = levelOf(bond.growth ?? 0)
-
-        // streak：今天首次互动 → 连续 +1；断档 → 重置为 1
-        let streak = bond.streak ?? 0
-        if (bond.last_active_day !== day) {
-          streak = bond.last_active_day === yesterdayStr() ? streak + 1 : 1
-        }
-
-        // 火花增量：按当日 reason 计数做软上限
-        const reasonKey = action === 'feed' || action === 'flower' ? action : 'interaction'
-        const rule = SPARK_RULES[reasonKey]
-        let delta = 0
-        const used = q.growthCountsOfDay.all(bond.id, day).find((r) => r.reason === reasonKey)?.n ?? 0
-        if (rule && used < rule.capTimes) delta = rule.delta
-
-        // 每日任务奖励（判重：quest:<id>:<day> 每天只发一次）
-        let questDelta = 0
-        const counts = questCountsToday(bond, day)
-        for (const t of QUESTS) {
-          if ((counts[t.id] ?? 0) >= t.target && !q.growthEventExists.get(bond.id, `quest:${t.id}:${day}`)) {
-            q.insertGrowthEvent.run(uuid(), bond.id, t.reward, `quest:${t.id}:${day}`, day)
-            questDelta += t.reward
-          }
-        }
-
-        if (delta > 0) q.insertGrowthEvent.run(uuid(), bond.id, delta, reasonKey, day)
-        const growth = (bond.growth ?? 0) + delta + questDelta
-        q.updateBondGrowth.run(growth, streak, day, bond.id)
-
-        const after = levelOf(growth)
-        const payload = {
-          bond: { ...bondMeta({ ...bond, growth, streak, last_active_day: day }), growth, ...after },
-          delta: delta + questDelta,
-          leveledUp: after.level > before.level,
-        }
-        const s1 = online.get(senderId)
-        const s2 = online.get(receiverId)
-        if (s1) io.to(s1).emit('growth_update', payload)
-        if (s2) io.to(s2).emit('growth_update', payload)
-      }
-    } catch (err) {
-      console.error('[digital-avatar] growth settlement failed:', err)
+    // ---- V1.4.3 火花成长：结算结果双端实时同步（REST 兜底时由 HTTP 响应带回）----
+    if (growth) {
+      const s1 = online.get(senderId)
+      const s2 = online.get(receiverId)
+      if (s1) io.to(s1).emit('growth_update', growth)
+      if (s2) io.to(s2).emit('growth_update', growth)
     }
   })
 

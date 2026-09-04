@@ -341,7 +341,14 @@ export class AvatarSprite {
       finalSource = url
     }
 
-    this.model = (await Live2DModel.from(finalSource as any)) as Live2DModel
+    console.info(`[load] Live2DModel.from start: ${avatarIdFromUrl(url)}`)
+    try {
+      this.model = (await Live2DModel.from(finalSource as any)) as Live2DModel
+    } catch (e) {
+      console.error('[load] Live2DModel.from failed:', avatarIdFromUrl(url), e)
+      throw e
+    }
+    console.info(`[load] Live2DModel.from done: ${avatarIdFromUrl(url)}`)
     this.model.scale.set(scale)
     this.model.anchor.set(0.5, 0.5)
     this.model.interactive = true

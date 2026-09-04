@@ -26,9 +26,12 @@ export interface AvatarDef {
 }
 
 export const AVATAR_LIBRARY: AvatarDef[] = [
+  // 两女：Hiyori 元气少女 / Haru 文静少女（atlas 取证：连裤袜+芭蕾鞋+女性手势）
   { id: 'hiyori', label: 'Hiyori', tag: '元气少女', path: 'models/hiyori/Hiyori.model3.json' },
-  { id: 'natori', label: 'Natori', tag: '沉稳御姐', path: 'models/natori/Natori.model3.json' },
-  { id: 'haru', label: 'Haru', tag: '阳光少年', path: 'models/haru/Haru.model3.json' },
+  { id: 'haru', label: 'Haru', tag: '文静少女', path: 'models/haru/Haru.model3.json' },
+  // 两男：Natori 西装青年（atlas 取证：西装西裤皮鞋领带）/ Mark 阳光少年（Live2D 官方男模）
+  { id: 'natori', label: 'Natori', tag: '西装青年', path: 'models/natori/Natori.model3.json' },
+  { id: 'mark', label: 'Mark', tag: '阳光少年', path: 'models/mark/Mark.model3.json' },
 ]
 
 /** id → model3 完整 URL（带 base 前缀，生产部署在 /digital-avatar/ 子路径） */

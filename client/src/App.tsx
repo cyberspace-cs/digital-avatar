@@ -6,14 +6,14 @@ import { AVATAR_LIBRARY, AVATAR_LABELS, MODEL_URLS, DEFAULT_AVATAR } from './liv
 import { PerfGovernor } from './live2d/perf'
 import type { QualityTier } from './live2d/perf'
 import { api } from './api'
-import { connectSocket, emit, getSocket } from './socket'
+import { connectSocket, emit, getSocket, isSocketConnected } from './socket'
 import Admin from './Admin'
 import type { BondMeta, InteractionEvent, Mood, QuestItem, User, Visibility } from './types'
 
 // V1.3.2 形象库配置化：见 live2d/models.ts，新增形象只改 models.ts 一处
 const MODEL_SCALE = 0.12
 // 形象按钮 emoji（衣橱芯片用）
-const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', natori: '🌙', haru: '☀️' }
+const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', haru: '📚', natori: '🌙', mark: '☀️' }
 
 type MenuPos = { x: number; y: number; target: 'me' | 'partner' } | null
 type Tab = 'companion' | 'quests' | 'records' | 'me'
@@ -108,6 +108,14 @@ export default function App() {
   const [myStyle, setMyStyle] = useState('default')
   // 首个模型加载中：给用户"分身登场中"反馈，而不是对着空白等
   const [booting, setBooting] = useState(true)
+  // V1.4.3 桌宠模式：藏起整个 App 壳，只留一只可拖拽的小人 + 迷你互动坞
+  const [petMode, setPetMode] = useState(() => localStorage.getItem('da_petmode') === '1')
+  const togglePetMode = useCallback(() => {
+    setPetMode((v) => {
+      localStorage.setItem('da_petmode', v ? '0' : '1')
+      return !v
+    })
+  }, [])
 
   // 对方 Live2D 模型懒加载器：未绑定用户不加载对方模型（省一半首屏带宽），绑定后才拉起
   const partnerLoaderRef = useRef<(() => void) | null>(null)
@@ -117,6 +125,8 @@ export default function App() {
   const governorRef = useRef<PerfGovernor | null>(null)
 
   const stateRef = useRef({ mood, visibility, me, partner, partnerMood, bond })
+  // V1.4.3：等回执的互动（eventId → applyGrowth），interaction_ack 到达时结算并清理
+  const ackWaiters = useRef(new Map<string, (g: any) => void>())
   stateRef.current = { mood, visibility, me, partner, partnerMood, bond }
 
   // toast 自动消失（升级提示/绑定提示/互动提示统一走这条）
@@ -465,12 +475,38 @@ export default function App() {
       setToast('先把分身送给 TA，绑定后就能互动啦 🎁')
       return
     }
-    emit('interaction', {
+    // V1.4.3 互动双链路：socket 实时播放为主，REST 幂等兜底。
+    // 之前只有 socket 一条路，WS 断线时互动静默丢失（没回应、火花也不涨）。
+    const eventId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const payload = {
       senderId: cur.me.id,
       receiverId: cur.partner.id,
       action,
       message: message ?? null,
-    })
+      eventId,
+    }
+    let settled = false
+    const applyGrowth = (g: any) => {
+      if (!g?.bond || settled) return
+      settled = true
+      setBond(g.bond)
+      if (g.leveledUp) setToast(`🔥 火花升级！Lv.${g.bond.level} ${g.bond.levelName}`)
+      refreshQuests()
+    }
+    if (isSocketConnected()) {
+      emit('interaction', payload)
+      // 1.6s 内没等到服务端回执（WS 半开/断线）→ REST 兜底，eventId 保证不重复结算
+      setTimeout(() => {
+        if (settled) { ackWaiters.current.delete(eventId); return }
+        api.interact(payload)
+          .then((r) => applyGrowth(r.growth))
+          .catch(() => {})
+          .finally(() => ackWaiters.current.delete(eventId))
+      }, 1600)
+    } else {
+      api.interact(payload).then((r) => applyGrowth(r.growth)).catch(() => {})
+    }
+    ackWaiters.current.set(eventId, applyGrowth)
     const mS = meSprite.current
     if (mS) {
       if (action === 'heart' || action === 'hug') spawnHearts(mS.x, mS.y - 260, 4, '💛')
@@ -509,6 +545,9 @@ export default function App() {
     setEvents((prev) => [ev, ...prev])
     const cur = stateRef.current
     const who: 'me' | 'partner' = ev.senderId === cur.me?.id ? 'me' : 'partner'
+    // socket 链路的自回声（self: true）只用于记时间线——发送端在 sendAction 里已本地
+    // 播放过一轮，这里再播会双重回应（动作二连、气泡闪两下）
+    if ((ev as any).self) return
     const sprite = who === 'me' ? meSprite.current : partnerSprite.current
 
     if (ev.action === 'hug') {
@@ -572,6 +611,14 @@ export default function App() {
         setBond(g.bond)
         if (g.leveledUp) setToast(`🔥 火花升级！Lv.${g.bond.level} ${g.bond.levelName}`)
         refreshQuests()
+      },
+      // V1.4.3：互动回执 → 结算对应互动并停止 REST 兜底计时
+      interaction_ack: (ev: any) => {
+        const waiter = ackWaiters.current.get(ev?.id)
+        if (waiter) {
+          ackWaiters.current.delete(ev.id)
+          waiter(ev.growth)
+        }
       },
     })
     api.getPartner(me.id).then(async (r) => {
@@ -759,9 +806,9 @@ export default function App() {
   // 若引导页/主界面各写一个 return，React 换树时会重建 canvas-host 节点，
   // 已 append 进去的 Pixi canvas 会随旧节点一起被丢弃 → 分身消失（只能靠碰运气的 DOM 复用）。
   return (
-    <div className="space">
+    <div className={`space${petMode ? ' petmode' : ''}`}>
       <div ref={canvasHost} className="canvas-host" />
-      <div className="aurora" aria-hidden><span /><span /><span /></div>
+      {!petMode && <div className="aurora" aria-hidden><span /><span /><span /></div>}
 
       {!me ? (
         <div className="onboard">
@@ -790,23 +837,25 @@ export default function App() {
             />
           )}
 
-          {/* 顶栏（精简：状态设置收进「我的」Tab） */}
-          <div className="topbar">
-            <div className="brand">数字分身</div>
-            <div className="topbar-right">
-              {partner ? (
-                <span className="chip">
-                  {partner.name} {partnerOnline ? '🟢' : '⚪'}
-                  {partnerMood && partnerMood !== 'neutral' && ` · ${MOOD_LABELS[partnerMood]}`}
-                </span>
-              ) : (
-                <button className="btn ghost" onClick={makeInvite}>把我的分身送给 TA</button>
-              )}
+          {/* 顶栏（精简：状态设置收进「我的」Tab）；桌宠模式下整个壳都藏起来 */}
+          {!petMode && (
+            <div className="topbar">
+              <div className="brand">数字分身</div>
+              <div className="topbar-right">
+                {partner ? (
+                  <span className="chip">
+                    {partner.name} {partnerOnline ? '🟢' : '⚪'}
+                    {partnerMood && partnerMood !== 'neutral' && ` · ${MOOD_LABELS[partnerMood]}`}
+                  </span>
+                ) : (
+                  <button className="btn ghost" onClick={makeInvite}>把我的分身送给 TA</button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* 火花关系卡（陪伴 Tab） */}
-          {tab === 'companion' && bond && (
+          {tab === 'companion' && !petMode && bond && (
             <div className={`bond-card ${bond.cold ? 'cold' : ''}`}>
               <div className="bond-row">
                 <span className="flame">{bond.cold ? '🕯️' : '🔥'}</span>
@@ -824,8 +873,8 @@ export default function App() {
             </div>
           )}
 
-          {/* 互动 Dock（陪伴 Tab） */}
-          {tab === 'companion' && (
+          {/* 互动 Dock（陪伴 Tab）；桌宠模式下换成迷你坞 */}
+          {tab === 'companion' && !petMode && (
             <div className="dock">
               {DOCK.map((d) => (
                 <button key={d.id} className="dock-btn" onClick={() => sendAction(d.id)}>
@@ -836,8 +885,24 @@ export default function App() {
             </div>
           )}
 
+          {/* V1.4.3 桌宠模式 UI：迷你互动坞 + 退出按钮（模型拖拽/点按/长按与常驻模式一致） */}
+          {petMode && (
+            <>
+              <div className="pet-dock">
+                {DOCK.map((d) => (
+                  <button key={d.id} className="dock-btn" onClick={() => sendAction(d.id)}>
+                    <span className="dock-emoji">{d.emoji}</span>
+                  </button>
+                ))}
+              </div>
+              <button className="pet-exit" onClick={togglePetMode} title="退出桌宠模式">
+                🖥️
+              </button>
+            </>
+          )}
+
           {/* 任务 Tab */}
-          {tab === 'quests' && (
+          {tab === 'quests' && !petMode && (
             <div className="panel">
               <div className={`panel-card remind ${bond?.cold ? 'cold' : ''}`}>
                 {bond?.cold
@@ -864,7 +929,7 @@ export default function App() {
           )}
 
           {/* 记录 Tab */}
-          {tab === 'records' && (
+          {tab === 'records' && !petMode && (
             <div className="panel">
               {events.length === 0 && <p className="sub">还没有互动，去戳戳 TA 吧</p>}
               <ul className="records-list">
@@ -891,7 +956,7 @@ export default function App() {
           )}
 
           {/* 我的 Tab */}
-          {tab === 'me' && (
+          {tab === 'me' && !petMode && (
             <div className="panel">
               <div className="panel-card">
                 <h3>{me.name}</h3>
@@ -948,24 +1013,30 @@ export default function App() {
                 <button className="btn ghost block" onClick={() => setTheme(theme === 'v1' ? 'v2' : 'v1')}>
                   🎨 切换主题（当前：{theme === 'v1' ? 'v1 经典' : 'v2 极光'}）
                 </button>
+                {/* V1.4.3 桌宠模式入口：藏起 App 壳，只留一只随身的 Live2D 小人 */}
+                <button className="btn ghost block" onClick={togglePetMode}>
+                  🐱 桌宠模式（悬浮小人）
+                </button>
               </div>
               <p className="sub center tiny">数字分身 V1.3.2 · 触控重构 + 形象库</p>
             </div>
           )}
 
-          {/* 底部 Tab 导航 */}
-          <nav className="tabbar">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                className={`tab ${tab === t.id ? 'active' : ''}`}
-                onClick={() => setTab(t.id)}
-              >
-                <span className="tab-emoji">{t.emoji}</span>
-                <span className="tab-label">{t.label}</span>
-              </button>
-            ))}
-          </nav>
+          {/* 底部 Tab 导航（桌宠模式下隐藏） */}
+          {!petMode && (
+            <nav className="tabbar">
+              {TABS.map((t) => (
+                <button
+                  key={t.id}
+                  className={`tab ${tab === t.id ? 'active' : ''}`}
+                  onClick={() => setTab(t.id)}
+                >
+                  <span className="tab-emoji">{t.emoji}</span>
+                  <span className="tab-label">{t.label}</span>
+                </button>
+              ))}
+            </nav>
+          )}
 
           {/* 邀请链接弹窗 */}
           {inviteLink && (

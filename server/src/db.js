@@ -64,6 +64,9 @@ export const q = {
   getUser: db.prepare('SELECT * FROM users WHERE id = ?'),
   insertBond: db.prepare('INSERT INTO bonds (id, user_a, user_b) VALUES (?, ?, ?)'),
   getBond: db.prepare(
+    // V1.4.3：双向匹配（四个占位符按 x,y,y,x 传参）。原 SQL 两个 OR 分支参数相同，
+    // 只认 user_a=sender 的顺序——B 发起互动时查不到 bond，火花永不结算
+    // （"喂食/送花没反应、火花不涨"的服务端根因）。
     `SELECT * FROM bonds WHERE (user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?)`,
   ),
   // V1.3.2：只取"最新"一条 bond —— 之前重复接受邀请会产生多条记录，
@@ -80,6 +83,8 @@ export const q = {
   insertEvent: db.prepare(
     'INSERT INTO events (id, sender_id, receiver_id, action, message, state_snapshot) VALUES (?, ?, ?, ?, ?, ?)',
   ),
+  // V1.4.3 互动双链路幂等：socket 与 REST 兜底共用客户端生成的 eventId 去重
+  getEvent: db.prepare('SELECT * FROM events WHERE id = ?'),
   eventsFor: db.prepare(
     `SELECT * FROM events WHERE sender_id = ? OR receiver_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 200`,
   ),

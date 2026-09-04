@@ -96,7 +96,16 @@ scope.onmessage = async (e: MessageEvent<PrefetchRequest>) => {
       for (const url of ent.candidates) {
         try {
           const r = await fetch(url)
-          if (r.ok) { res = r; break }
+          if (!r.ok) continue
+          // V1.4.3：SPA fallback 会给不存在的 .webp/.sd.png 返回 200 的 index.html（fetch
+          // 默认 Accept 头接受 HTML）→ HTML 当纹理解码必炸 "Texture loading error"（Mark 初载
+          // 失败的根因）。图片候选必须校验 Content-Type 确实是 image/*，否则试下一个候选。
+          if (ent.candidates.length > 1 && /(\.webp|\.png)$/i.test(url)) {
+            const ct = r.headers.get('content-type') ?? ''
+            if (!ct.startsWith('image/')) continue
+          }
+          res = r
+          break
         } catch (_e) { /* 尝试下一个候选 */ }
       }
       if (!res) return // 失败则跳过，让库走原始 XHR（不会白屏）

@@ -42,4 +42,10 @@ export const api = {
     req<{ quests: any[]; streak: number; lastActiveDay: string | null; cold: boolean }>(
       `/api/quests/${userId}`,
     ),
+  // ---------- V1.4.3 互动 REST 兜底：WS 断线时从这里落库 + 火花结算（幂等） ----------
+  interact: (payload: { senderId: string; receiverId: string; action: string; message?: string | null; eventId: string }) =>
+    req<{ event: any | null; growth: any | null; duplicate?: boolean; error?: string }>('/api/interact', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 }

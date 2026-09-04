@@ -49,6 +49,9 @@ const OUTFIT_MODEL_TEX: Record<string, string[]> = {
   hiyori: ['texture_01.png'],
   natori: ['texture_00.png'],
   haru: ['texture_01.png'],
+  // V1.4.3 新增男模 Mark：单 atlas 全混排（发丝/袖子包围盒互相重叠），
+  // 否列矩形护不住 → 用白名单矩形（只染矩形内的像素）
+  mark: ['texture_00.png'],
 }
 
 /** 保护矩形（atlas 像素坐标，2048 原图基准；SD 半图按 img.width/2048 缩放） */
@@ -88,14 +91,32 @@ const OUTFIT_PROTECT: Record<string, Record<string, ProtectRect[]>> = {
 }
 
 /**
+ * 白名单矩形（V1.4.3，Mark 专用）：有此项时【只有矩形内的像素】参与重染。
+ * Mark 的红色卫衣袖与棕色发丝在 atlas 上包围盒互相重叠，否列矩形怎么切都会把
+ * 染色切一半留一半（花斑）→ 反过来只圈服装：两条袖子 + 卫衣/背带裤本体。
+ */
+const OUTFIT_ALLOW: Record<string, Record<string, [number, number, number, number][]>> = {
+  mark: {
+    'texture_00.png': [
+      [1240, 170, 260, 430], // 左袖（红）
+      [1180, 700, 220, 430], // 右袖（红）
+      [760, 1700, 510, 320], // 卫衣 + 蓝色背带裤
+    ],
+  },
+}
+
+/**
  * 每模型肤色掩码阈值。
  * Hiyori 皮肤/开衫同为奶油色（h25-45），阈值 42 恰好切在腿部高光 h43-44 上 → 粉色花斑；
  * 实测放宽到 h≤48、s≤0.5 后皮肤全保护、深色服装不受影响。
+ * lip=false（Mark）：红色卫衣的暗部 (h≈355, s0.6, v0.7) 会撞上通用唇色保护带 → 整件衣服染花，
+ * Mark 的嘴是独立粉色块且不在服装矩形内，关闭唇色带无副作用。
  */
-const SKIN_RULE: Record<string, { warmHue: number; warmSat: number }> = {
-  hiyori: { warmHue: 48, warmSat: 0.5 },
-  natori: { warmHue: 42, warmSat: 0.42 },
-  haru: { warmHue: 42, warmSat: 0.42 },
+const SKIN_RULE: Record<string, { warmHue: number; warmSat: number; lip: boolean }> = {
+  hiyori: { warmHue: 48, warmSat: 0.5, lip: true },
+  natori: { warmHue: 42, warmSat: 0.42, lip: true },
+  haru: { warmHue: 42, warmSat: 0.42, lip: true },
+  mark: { warmHue: 42, warmSat: 0.42, lip: false },
 }
 
 /** 从模型 URL 解析形象 id（…/models/<id>/<Name>.model3.json） */
@@ -142,14 +163,16 @@ export async function recolorOutfitTextures(
         ctx.drawImage(bmp, 0, 0)
         bmp.close?.()
         const img = ctx.getImageData(0, 0, cvs.width, cvs.height)
-        // 保护矩形/肤色阈值换算到当前纹理尺寸（SD 半图按宽度比例缩放）
+        // 保护矩形/白名单矩形/肤色阈值换算到当前纹理尺寸（SD 半图按宽度比例缩放）
         const rects = OUTFIT_PROTECT[avatarId]?.[norm]
-        const k = rects ? img.width / 2048 : 1
+        const k = img.width / 2048
         const scaled = rects?.map(({ rect, hairOnly }) => ({
           rect: rect.map((n) => n * k) as [number, number, number, number],
           hairOnly,
         }))
-        recolorPixels(img.data, img.width, style, scaled, avatarId)
+        const allowRaw = OUTFIT_ALLOW[avatarId]?.[norm]
+        const allow = allowRaw?.map((r) => r.map((n) => n * k) as [number, number, number, number])
+        recolorPixels(img.data, img.width, style, scaled, avatarId, allow)
         ctx.putImageData(img, 0, 0)
         const out: Blob = await (cvs as OffscreenCanvas).convertToBlob({ type: 'image/png' })
         outUrl = URL.createObjectURL(out)
@@ -172,11 +195,11 @@ export async function recolorOutfitTextures(
  * 不误伤：Haru 深红缝线(H345 V.25)明度不足保持染色，深棕鞋(V<0.5)保持染色。
  */
 function isSkin(h: number, s: number, v: number, avatarId: string): boolean {
-  const { warmHue, warmSat } = SKIN_RULE[avatarId] ?? { warmHue: 42, warmSat: 0.42 }
-  const warm = h <= warmHue || h >= 335
-  if (warm && s <= warmSat && v >= 0.5) return true
-  // 嘴唇/腮红高饱和带
-  if ((h >= 340 || h <= 15) && s >= 0.3 && s <= 0.65 && v >= 0.45 && v <= 0.8) return true
+  const rule = SKIN_RULE[avatarId] ?? { warmHue: 42, warmSat: 0.42, lip: true }
+  const warm = h <= rule.warmHue || h >= 335
+  if (warm && s <= rule.warmSat && v >= 0.5) return true
+  // 嘴唇/腮红高饱和带（Mark 关闭：红色卫衣暗部会撞带）
+  if (rule.lip && (h >= 340 || h <= 15) && s >= 0.3 && s <= 0.65 && v >= 0.45 && v <= 0.8) return true
   return false
 }
 
@@ -186,6 +209,7 @@ function recolorPixels(
   st: OutfitStyle,
   rects?: { rect: [number, number, number, number]; hairOnly?: boolean }[],
   avatarId = '',
+  allow?: [number, number, number, number][],
 ) {
   const strength = st.strength
   const target = st.hue
@@ -208,6 +232,16 @@ function recolorPixels(
     if (v < 0.15) continue // 线稿/最深阴影不染
     if (s < 0.06 && v > 0.9) continue // 纯白高光/白蕾丝不染（否则在深色袜/裙上出现粉色斑点）
     // 保护矩形：硬矩形一律保留；hairOnly 矩形仅保留深藏青发色，其余（浅紫布料）照常染色
+    if (allow) {
+      const p = i >> 2
+      const px = p % w
+      const py = (p / w) | 0
+      let hit = false
+      for (const [ax, ay, aw, ah] of allow) {
+        if (px >= ax && px < ax + aw && py >= ay && py < ay + ah) { hit = true; break }
+      }
+      if (!hit) continue
+    }
     if (rects) {
       const p = i >> 2
       const px = p % w

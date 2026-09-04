@@ -977,3 +977,56 @@ body,
 .sub.tiny {
   font-size: 11px;
 }
+
+/* ---------- V1.4.3 桌宠模式 ---------- */
+/* 藏起 App 壳后，页面只剩透明的舞台 + 一只可拖拽的小人 + 迷你互动坞 */
+.space.petmode {
+  background: transparent;
+}
+
+.pet-dock {
+  position: fixed;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  backdrop-filter: blur(var(--blur));
+}
+
+.pet-dock .dock-btn {
+  padding: 4px 6px;
+}
+
+.pet-dock .dock-emoji {
+  font-size: 24px;
+}
+
+.pet-exit {
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top));
+  right: 14px;
+  z-index: 30;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
+  backdrop-filter: blur(var(--blur));
+  font-size: 20px;
+  cursor: pointer;
+  transition: transform 0.15s var(--ease);
+}
+
+.pet-exit:hover {
+  transform: scale(1.08);
+}
+
+.pet-exit:active {
+  transform: scale(0.92);
+}
