@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
 import './pixi-setup'
 import { AvatarSprite, OUTFIT_STYLES } from './live2d/avatar'
+import { AVATAR_LIBRARY, AVATAR_LABELS, MODEL_URLS, DEFAULT_AVATAR } from './live2d/models'
 import { PerfGovernor } from './live2d/perf'
 import type { QualityTier } from './live2d/perf'
 import { api } from './api'
@@ -9,18 +10,10 @@ import { connectSocket, emit, getSocket } from './socket'
 import Admin from './Admin'
 import type { BondMeta, InteractionEvent, Mood, QuestItem, User, Visibility } from './types'
 
-// 模型路径需带 base 前缀（生产部署在 /digital-avatar/ 子路径下）
-// V1.3 换装：形象可在 Hiyori / Natori 间切换，按 users.avatar 渲染
-const BASE = import.meta.env.BASE_URL
-const MODELS: Record<string, string> = {
-  hiyori: `${BASE}models/hiyori/Hiyori.model3.json`,
-  natori: `${BASE}models/natori/Natori.model3.json`,
-}
-const AVATAR_LABELS: Record<string, string> = {
-  hiyori: 'Hiyori · 活泼',
-  natori: 'Natori · 沉稳',
-}
+// V1.3.2 形象库配置化：见 live2d/models.ts，新增形象只改 models.ts 一处
 const MODEL_SCALE = 0.12
+// 形象按钮 emoji（衣橱芯片用）
+const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', natori: '🌙', haru: '☀️' }
 
 type MenuPos = { x: number; y: number; target: 'me' | 'partner' } | null
 type Tab = 'companion' | 'quests' | 'records' | 'me'
@@ -118,11 +111,10 @@ export default function App() {
 
   // 对方 Live2D 模型懒加载器：未绑定用户不加载对方模型（省一半首屏带宽），绑定后才拉起
   const partnerLoaderRef = useRef<(() => void) | null>(null)
-  // V1.3 换装：当前已加载的形象 + 帧率档位（swap 时按当前档位选纹理 LOD）+ 拖拽解绑器
-  const meAvatarRef = useRef<string>('hiyori')
+  // V1.3 换装：当前已加载的形象 + 帧率档位（swap 时按当前档位选纹理 LOD）
+  const meAvatarRef = useRef<string>(DEFAULT_AVATAR)
   const partnerAvatarRef = useRef<string | null>(null)
   const governorRef = useRef<PerfGovernor | null>(null)
-  const dragDisposers = useRef<{ me?: () => void; partner?: () => void }>({})
 
   const stateRef = useRef({ mood, visibility, me, partner, partnerMood, bond })
   stateRef.current = { mood, visibility, me, partner, partnerMood, bond }
@@ -163,7 +155,13 @@ export default function App() {
           setToast(`收到 ${r.partner.name} 送你的数字分身！`)
           // 回到应用页（生产部署在 /digital-avatar/ 子路径，不能用 location.origin）
           location.href = location.origin + import.meta.env.BASE_URL
-        }).catch(() => setToast('邀请链接无效'))
+        }).catch((e) => {
+          // 服务端 V1.3.2：任一方已有绑定会拒绝（409 already_bound）
+          const msg: string = e?.message ?? ''
+          setToast(msg.includes('already_bound')
+            ? '你或 TA 已经绑定了其他分身啦'
+            : msg.includes('404') ? '邀请链接无效' : '邀请接受失败，请重试')
+        })
       }
     } else {
       ; (window as any).__pendingInvite = invite
@@ -200,12 +198,20 @@ export default function App() {
     partnerSprite.current = partnerS
 
     // 自己的模型立即加载（按自己选定的形象）；对方的模型懒加载（绑定后才拉起，未绑定用户首屏减半）
-    meS.load(app.stage, MODELS[meAvatarRef.current] ?? MODELS.hiyori, MODEL_SCALE, tier).then(() => {
-      meS.setPosition(window.innerWidth * 0.35, window.innerHeight * 0.78)
-      bindDrag(meS, 'me')
+    // V1.3.3：初始形象直接同步读 localStorage——不依赖身份 effect 的执行次序，
+    // 杜绝"先载默认形象、身份 effect 到位后再换"的双重加载（真机上白耗一倍首屏时间）
+    try {
+      const savedAvatar = JSON.parse(localStorage.getItem('da_me') || 'null')?.avatar
+      if (savedAvatar && MODEL_URLS[savedAvatar]) meAvatarRef.current = savedAvatar
+    } catch { /* 忽略坏数据 */ }
+    meS.load(app.stage, MODEL_URLS[meAvatarRef.current] ?? MODEL_URLS[DEFAULT_AVATAR], MODEL_SCALE, tier).then(() => {
+      meS.setPosition(window.innerWidth * 0.32, window.innerHeight * 0.78)
         ; (window as any).__stageReady = true
       setBooting(false)
     }).catch(() => setBooting(false))
+
+    // 触控统一绑定一次（拖拽/长按菜单/右键菜单），换装/换形象无需重绑
+    bindStageTouch(app)
 
     let partnerLoading = false
     const loadPartnerModel = () => {
@@ -213,9 +219,8 @@ export default function App() {
       partnerLoading = true
       const pAvatar = stateRef.current.partner?.avatar ?? 'natori'
       partnerAvatarRef.current = pAvatar
-      partnerS.load(app.stage, MODELS[pAvatar] ?? MODELS.natori, MODEL_SCALE, tier).then(() => {
-        partnerS.setPosition(window.innerWidth * 0.65, window.innerHeight * 0.78)
-        bindDrag(partnerS, 'partner')
+      partnerS.load(app.stage, MODEL_URLS[pAvatar] ?? MODEL_URLS.natori, MODEL_SCALE, tier).then(() => {
+        partnerS.setPosition(window.innerWidth * 0.68, window.innerHeight * 0.78)
         // 加载完成时按当前状态决定可见性与表情（getPartner 可能早已返回，竞态兜底）
         partnerS.model!.visible = !!stateRef.current.partner
         const st = stateRef.current
@@ -236,6 +241,7 @@ export default function App() {
     })
 
     return () => {
+      stageTouchDisposer.current?.()
       app.destroy(true)
       appRef.current = null
     }
@@ -251,16 +257,20 @@ export default function App() {
     }
   }, [partner])
 
-  // ---------- 拖拽 + 边缘姿态 + 触屏长按菜单 ----------
-  const bindDrag = (sprite: AvatarSprite, who: 'me' | 'partner') => {
+  // ---------- 触控统一绑定（V1.3.2 重构） ----------
+  // 真机问题：之前依赖 PIXI interaction 的 pointerdown 在触屏上不可靠（拖拽/长按全失效）。
+  // 改为 DOM 指针事件 + 显式命中测试（hitTest 失败再退回包围盒 AABB），双保险。
+  const stageTouchDisposer = useRef<(() => void) | null>(null)
+  const bindStageTouch = (app: PIXI.Application) => {
+    const canvas = app.view as HTMLCanvasElement
+    let active: { who: 'me' | 'partner'; sprite: AvatarSprite } | null = null
     let dragging = false
     let moved = 0
     let last = { x: 0, y: 0 }
     let pressTimer: number | null = null
-    const model = sprite.model!
 
-    // 菜单弹出坐标夹取在视口内（触屏点小人边缘时不至于被截断）
-    const openMenuAt = (x: number, y: number) => {
+    const openMenuAt = (who: 'me' | 'partner', x: number, y: number) => {
+      // 菜单弹出坐标夹取在视口内（触屏点小人边缘时不至于被截断）
       setMenu({
         x: Math.min(Math.max(12, x), window.innerWidth - 200),
         y: Math.min(Math.max(12, y), window.innerHeight - 320),
@@ -268,25 +278,69 @@ export default function App() {
       })
     }
 
-    model.on('pointerdown', (e: PIXI.InteractionEvent) => {
+    /** 命中测试：几何命中（PIXI hitTest 沿 parent 链归到模型）最优先——所见即所得；
+     *  无几何命中时，在"真实绘制范围包含点击点"的候选里选最近中心者（触屏宽容）。
+     *  V1.3.3 修复：不能用 getBounds（moc 画布含大块空白）做兜底——对方画布
+     *  会盖住空白点击区导致拖错人/拖不动；也不能固定 partner 优先。 */
+    const pick = (x: number, y: number) => {
+      const candidates: Array<{ who: 'me' | 'partner'; sprite: AvatarSprite | null }> = [
+        { who: 'partner', sprite: partnerSprite.current },
+        { who: 'me', sprite: meSprite.current },
+      ]
+      const im = (app.renderer as any).plugins?.interaction as any
+      let hits: any[] = []
+      try {
+        const r = im?.hitTest?.({ x, y })
+        hits = Array.isArray(r) ? r : r ? [r] : []
+      } catch (_e) { hits = [] }
+      const isDescendant = (h: any, m: any) => {
+        for (let o = h; o; o = o.parent) if (o === m) return true
+        return false
+      }
+      // 1) 几何精确命中（最上层可见模型）
+      for (const h of hits) {
+        for (const c of candidates) {
+          const m = c.sprite?.model
+          if (m?.visible && isDescendant(h, m)) return { who: c.who, sprite: c.sprite! }
+        }
+      }
+      // 2) 最近中心兜底（点在角色附近空白时的触屏宽容）
+      let best: { who: 'me' | 'partner'; sprite: AvatarSprite; d2: number } | null = null
+      for (const c of candidates) {
+        const b = c.sprite?.realBounds?.()
+        if (!b) continue
+        if (x < b.x || x > b.x + b.width || y < b.y || y > b.y + b.height) continue
+        const dx = x - (b.x + b.width / 2)
+        const dy = y - (b.y + b.height / 2)
+        const d2 = dx * dx + dy * dy
+        if (!best || d2 < best.d2) best = { who: c.who, sprite: c.sprite!, d2 }
+      }
+      return best ? { who: best.who, sprite: best.sprite } : null
+    }
+
+    const onDown = (e: PointerEvent) => {
+      if (!e.isPrimary) return
+      const hit = pick(e.clientX, e.clientY)
+      if (!hit) return
+      active = hit
       dragging = true
       moved = 0
-      const g = e.data.global
-      last = { x: g.x, y: g.y }
-      // 触屏长按 550ms = 菜单（桌面右键走 rightdown）；移动超过阈值即视为拖拽并取消
+      last = { x: e.clientX, y: e.clientY }
+      // 触屏长按 550ms = 菜单；移动超过阈值即视为拖拽并取消
       if (pressTimer != null) clearTimeout(pressTimer)
+      const sx = e.clientX
+      const sy = e.clientY
       pressTimer = window.setTimeout(() => {
         pressTimer = null
         if (!dragging || moved >= 10) return
         dragging = false
-        openMenuAt(g.x, g.y)
+        openMenuAt(active!.who, sx, sy)
       }, 550)
-    })
-
+    }
     const onMove = (e: PointerEvent) => {
-      if (!dragging) return
-      // 触屏 PointerEvent.movementX/Y 常为 undefined → NaN 会把模型坐标算飞；
-      // 统一用 clientX/Y 差值（autoDensity 下 PIXI 全局坐标 == CSS 像素）
+      if (!dragging || !active?.sprite.model) return
+      const model = active.sprite.model
+      // 触屏 movementX/Y 常为 undefined → 统一用 clientX/Y 差值（autoDensity 下 == CSS 像素）
       const dx = e.clientX - last.x
       const dy = e.clientY - last.y
       last = { x: e.clientX, y: e.clientY }
@@ -298,55 +352,58 @@ export default function App() {
       model.x = Math.min(window.innerWidth - 60, Math.max(60, model.x + dx))
       model.y = Math.min(window.innerHeight - 40, Math.max(120, model.y + dy))
       // 同步 target/home：否则 tick() 的 lerp 会把模型往原位拉，拖拽像在跟自己较劲
-      sprite.cancelReturn()
-      sprite.target.x = model.x
-      sprite.target.y = model.y
-      sprite.home.x = model.x
-      sprite.home.y = model.y
+      active.sprite.cancelReturn()
+      active.sprite.target.x = model.x
+      active.sprite.target.y = model.y
+      active.sprite.home.x = model.x
+      active.sprite.home.y = model.y
     }
-    const onUp = () => {
-      if (!dragging) return
+    const onUp = (e: PointerEvent) => {
+      if (!dragging || !active) return
       dragging = false
-      model.cursor = 'default'
       if (pressTimer != null) {
         clearTimeout(pressTimer)
         pressTimer = null
       }
       if (moved < 6) {
         // 单击：默认互动
-        if (who === 'partner') {
+        if (active.who === 'partner') {
           sendAction('poke')
         } else {
-          sprite.play('poke')
+          active.sprite.play('poke')
         }
       } else {
-        edgePose(sprite)
+        edgePose(active.sprite)
       }
+      active = null
+      void e
     }
     const onCancel = () => {
       dragging = false
-      model.cursor = 'default'
+      active = null
       if (pressTimer != null) {
         clearTimeout(pressTimer)
         pressTimer = null
       }
     }
-    // 换装会重绑拖拽：先解绑上一套监听，避免重复累加
-    dragDisposers.current[who]?.()
-    dragDisposers.current[who] = () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onCancel)
+    const onCtx = (e: MouseEvent) => {
+      // 桌面右键菜单
+      e.preventDefault()
+      const hit = pick(e.clientX, e.clientY)
+      if (hit) openMenuAt(hit.who, e.clientX, e.clientY)
     }
+    canvas.addEventListener('pointerdown', onDown)
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onCancel)
-
-    model.on('rightdown', (e: PIXI.InteractionEvent) => {
-      e.data.originalEvent.preventDefault()
-      openMenuAt(e.data.global.x, e.data.global.y)
-    })
-    sprite.model!.on('pointerdown', () => sprite.model!.cursor = 'grab')
+    canvas.addEventListener('contextmenu', onCtx)
+    stageTouchDisposer.current = () => {
+      canvas.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+      canvas.removeEventListener('contextmenu', onCtx)
+    }
   }
 
   /** 拖到屏幕边缘时的探头/倾斜姿态 */
@@ -372,10 +429,27 @@ export default function App() {
   }
 
   // ---------- 发送互动 ----------
+  // 互动气泡文案（动作播不出来时也必有可见反馈；模型动作数量有限见 avatar.ts）
+  const ACTION_BUBBLES: Record<string, string> = {
+    poke: '戳戳你 👉',
+    pat: '摸摸头～',
+    hug: '抱抱！🤗',
+    heart: '比心 ❤️',
+    wave: '嗨嗨～ 👋',
+    pinch: '捏捏脸',
+    feed: '请你吃蛋糕 🧁',
+    flower: '送你花 💐',
+  }
   const sendAction = useCallback((action: string, message?: string) => {
     const cur = stateRef.current
     if (!cur.me) return
-    // 未绑定时给出明确引导，而不是按钮点了没反应
+    // 本地反馈先行（未绑定点按钮也有动作反馈，而不是"点了没反应"）
+    meSprite.current?.play(action === 'feed' || action === 'flower' ? 'wave' : action)
+    if (!message) {
+      setBubble({ who: 'me', text: ACTION_BUBBLES[action] ?? labelOf(action) })
+      setTimeout(() => setBubble(null), 5000)
+    }
+    // 未绑定时给出明确引导
     if (!cur.partner) {
       setToast('先把分身送给 TA，绑定后就能互动啦 🎁')
       return
@@ -386,8 +460,12 @@ export default function App() {
       action,
       message: message ?? null,
     })
-    // 本地立即播放发送方反馈（自己的分身做一个示意动作）
-    meSprite.current?.play(action === 'feed' || action === 'flower' ? 'wave' : action)
+    const mS = meSprite.current
+    if (mS) {
+      if (action === 'heart' || action === 'hug') spawnHearts(mS.x, mS.y - 260, 4, '💛')
+      if (action === 'feed') spawnHearts(mS.x, mS.y - 260, 3, '🧁')
+      if (action === 'flower') spawnHearts(mS.x, mS.y - 260, 3, '💐')
+    }
     const s = partnerSprite.current
     if (s) {
       if (action === 'heart' || action === 'hug') spawnHearts(s.x, s.y - 260, 6, '💛')
@@ -437,6 +515,8 @@ export default function App() {
       sprite.playSadReaction()
     } else {
       sprite.play(ev.action)
+      setBubble({ who, text: ACTION_BUBBLES[ev.action] ?? labelOf(ev.action) })
+      setTimeout(() => setBubble(null), 5000)
       if (ev.action === 'heart' || ev.action === 'hug') spawnHearts(sprite.x, sprite.y - 260, 6, '💛')
       if (ev.action === 'feed') spawnHearts(sprite.x, sprite.y - 260, 5, '🧁')
       if (ev.action === 'flower') spawnHearts(sprite.x, sprite.y - 260, 5, '💐')
@@ -456,6 +536,14 @@ export default function App() {
     connectSocket(me.id, {
       interaction: handleIncoming,
       partner_online: (online: boolean) => setPartnerOnline(online),
+      // V1.3.3：TA 接受邀请时服务端向邀请人推 bonded —— 之前客户端没接这个事件，
+      // 邀请人已打开的页面永远不显示对方（表现为"邀请链接没用"，只能手动刷新）
+      bonded: (p: any) => {
+        if (p?.partner) {
+          setPartner(p.partner)
+          setToast(`已与 ${p.partner.name} 绑定，火花点燃 🔥`)
+        }
+      },
       state_update: (s: any) => {
         // V1.3 换装：对方换了形象/穿搭，实时跟随
         if (s.avatar || s.style) swapPartnerLook(s)
@@ -533,23 +621,42 @@ export default function App() {
   }
 
   // ---------- V1.3 换装：切换形象（销毁旧模型 + 加载新模型，双端同步） ----------
-  const swapMyModel = async (key: string) => {
+  const swapMyModel = async (key: string): Promise<boolean> => {
     const app = appRef.current
     const sprite = meSprite.current
-    if (!app || !sprite || !MODELS[key]) return
+    if (!app || !sprite || !MODEL_URLS[key]) return false
     const home = { ...sprite.home }
+    const prev = meAvatarRef.current
     meAvatarRef.current = key
-    await sprite.swap(app.stage, MODELS[key], MODEL_SCALE, governorRef.current?.current ?? 'high')
+    try {
+      await sprite.swap(app.stage, MODEL_URLS[key], MODEL_SCALE, governorRef.current?.current ?? 'high')
+    } catch (e) {
+      // swap 先销毁旧模型才加载新模型：失败必须回滚旧形象，不能留空白舞台
+      console.error('[swap] 模型加载失败', e)
+      meAvatarRef.current = prev
+      if (prev !== key && MODEL_URLS[prev]) {
+        await sprite
+          .swap(app.stage, MODEL_URLS[prev], MODEL_SCALE, governorRef.current?.current ?? 'high')
+          .catch(() => {})
+        sprite.setPosition(home.x, home.y)
+        sprite.setMood(stateRef.current.mood)
+      }
+      return false
+    }
     sprite.setPosition(home.x, home.y)
-    bindDrag(sprite, 'me')
     sprite.setMood(stateRef.current.mood)
+    return true
   }
 
   const applyAvatar = async (key: string) => {
     if (!me || meAvatarRef.current === key) return
     // 加载提示先行（换模型需拉取资源，给用户即时反馈而不是"点了没反应"）
     setToast('换装中…')
-    await swapMyModel(key)
+    const ok = await swapMyModel(key)
+    if (!ok) {
+      setToast('换装失败，请稍后重试')
+      return
+    }
     const nu = { ...me, avatar: key }
     setMe(nu)
     localStorage.setItem('da_me', JSON.stringify(nu))
@@ -574,19 +681,19 @@ export default function App() {
     const sprite = partnerSprite.current
     if (!app || !sprite) return
     if (look.style) sprite.applyStyle(look.style)
-    if (look.avatar && partnerAvatarRef.current !== look.avatar && MODELS[look.avatar]) {
+    if (look.avatar && partnerAvatarRef.current !== look.avatar && MODEL_URLS[look.avatar]) {
       const home = { ...sprite.home }
       partnerAvatarRef.current = look.avatar
       sprite
-        .swap(app.stage, MODELS[look.avatar], MODEL_SCALE, governorRef.current?.current ?? 'high')
+        .swap(app.stage, MODEL_URLS[look.avatar], MODEL_SCALE, governorRef.current?.current ?? 'high')
         .then(() => {
           sprite.setPosition(home.x, home.y)
-          bindDrag(sprite, 'partner')
           sprite.model!.visible = !!stateRef.current.partner
           const st = stateRef.current
           if (st.bond?.cold) sprite.setMood('low')
           else sprite.setMood(st.partnerMood ?? 'neutral')
         })
+        .catch((e) => console.error('[swap] 对方形象加载失败', e))
     }
   }
 
@@ -601,9 +708,14 @@ export default function App() {
     if (key !== meAvatarRef.current) swapMyModel(key)
     const invite = (window as any).__pendingInvite
     if (invite) {
-      const r = await api.acceptInvite(invite, user.id)
-      setToast(`收到 ${r.partner.name} 送你的数字分身！`)
-      setTimeout(() => (location.href = location.origin + import.meta.env.BASE_URL), 1200)
+      try {
+        const r = await api.acceptInvite(invite, user.id)
+        setToast(`收到 ${r.partner.name} 送你的数字分身！`)
+        setTimeout(() => (location.href = location.origin + import.meta.env.BASE_URL), 1200)
+      } catch (e: any) {
+        const msg: string = e?.message ?? ''
+        setToast(msg.includes('already_bound') ? '你或 TA 已经绑定了其他分身啦' : '邀请链接无效')
+      }
     }
   }
 
@@ -770,17 +882,19 @@ export default function App() {
                     : '还没有绑定 TA'}
                 </p>
               </div>
-              {/* V1.3 换装：形象 + 穿搭风格，双端实时同步 */}
+              {/* V1.3.2 形象库（配置化）+ 穿搭风格，双端实时同步 */}
               <div className="panel-card">
                 <h4>形象</h4>
-                <div className="look-row">
-                  {Object.keys(MODELS).map((k) => (
+                <div className="wardrobe-row">
+                  {AVATAR_LIBRARY.map((a) => (
                     <button
-                      key={k}
-                      className={`btn ${((me.avatar ?? 'hiyori') === k) ? 'active' : ''}`}
-                      onClick={() => applyAvatar(k)}
+                      key={a.id}
+                      className={`style-chip ${((me.avatar ?? 'hiyori') === a.id) ? 'active' : ''}`}
+                      aria-pressed={(me.avatar ?? 'hiyori') === a.id}
+                      onClick={() => applyAvatar(a.id)}
                     >
-                      {AVATAR_LABELS[k] ?? k}
+                      <span className="style-emoji">{AVATAR_EMOJI[a.id] ?? '🧑‍🎤'}</span>
+                      <span className="style-label">{a.label} · {a.tag}</span>
                     </button>
                   ))}
                 </div>
@@ -816,7 +930,7 @@ export default function App() {
                   🎨 切换主题（当前：{theme === 'v1' ? 'v1 经典' : 'v2 极光'}）
                 </button>
               </div>
-              <p className="sub center tiny">数字分身 V1.3.1 · 换装（肤色安全）</p>
+              <p className="sub center tiny">数字分身 V1.3.2 · 触控重构 + 形象库</p>
             </div>
           )}
 
@@ -840,8 +954,20 @@ export default function App() {
               <div className="modal-card" onClick={(e) => e.stopPropagation()}>
                 <h3>把链接发给 TA</h3>
                 <p className="link-text">{inviteLink}</p>
-                <p className="sub">链接已复制。TA 打开接受后，你的分身就会住进 TA 的设备里</p>
-                <button className="btn" onClick={() => setInviteLink('')}>好</button>
+                <p className="sub">TA 打开接受后，你的分身就会住进 TA 的设备里</p>
+                {/* 剪贴板可能被浏览器静默拒绝：给手动复制兜底 */}
+                <div className="look-row">
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(inviteLink).then(
+                        () => setToast('已复制，去粘贴给 TA 吧'),
+                        () => setToast('复制失败，请长按链接手动复制'),
+                      )
+                    }}
+                  >复制链接</button>
+                  <button className="btn ghost" onClick={() => setInviteLink('')}>好</button>
+                </div>
               </div>
             </div>
           )}

@@ -156,18 +156,19 @@ const MOOD_PARAM_TAU = 120
  * - `emoji`：配饰符号，空串表示无配饰
  * - `aura`：光环颜色（0xRRGGBB），0 表示无光环
  * - `anchor`：配饰挂点 head=头顶 / side=头侧 / neck=脖子
+ * - `size`：配饰尺寸 = 角色真实绘制高度 × size（E2E 截图校准：🎀🧣 全尺寸会遮脸）
  * - `swatch`：UI 色板展示色（与光环同色系）
  */
 export const OUTFIT_STYLES: Record<
   string,
-  { label: string; emoji: string; aura: number; anchor: 'head' | 'side' | 'neck'; swatch: string }
+  { label: string; emoji: string; aura: number; anchor: 'head' | 'side' | 'neck'; size: number; swatch: string }
 > = {
-  default: { label: '原生', emoji: '', aura: 0, anchor: 'head', swatch: '#c9c9d6' },
-  sakura: { label: '蝴蝶结', emoji: '🎀', aura: 0xff9ec4, anchor: 'side', swatch: '#ff9ec4' },
-  ocean: { label: '小蓝帽', emoji: '🧢', aura: 0x6cc3ff, anchor: 'head', swatch: '#6cc3ff' },
-  sunset: { label: '向日葵', emoji: '🌻', aura: 0xffb26b, anchor: 'side', swatch: '#ffb26b' },
-  night: { label: '小皇冠', emoji: '👑', aura: 0xa78bfa, anchor: 'head', swatch: '#a78bfa' },
-  mono: { label: '小围巾', emoji: '🧣', aura: 0xd8dee9, anchor: 'neck', swatch: '#d8dee9' },
+  default: { label: '原生', emoji: '', aura: 0, anchor: 'head', size: 0.2, swatch: '#c9c9d6' },
+  sakura: { label: '蝴蝶结', emoji: '🎀', aura: 0xff9ec4, anchor: 'side', size: 0.11, swatch: '#ff9ec4' },
+  ocean: { label: '小蓝帽', emoji: '🧢', aura: 0x6cc3ff, anchor: 'head', size: 0.15, swatch: '#6cc3ff' },
+  sunset: { label: '向日葵', emoji: '🌻', aura: 0xffb26b, anchor: 'side', size: 0.12, swatch: '#ffb26b' },
+  night: { label: '小皇冠', emoji: '👑', aura: 0xa78bfa, anchor: 'head', size: 0.13, swatch: '#a78bfa' },
+  mono: { label: '小围巾', emoji: '🧣', aura: 0xd8dee9, anchor: 'neck', size: 0.12, swatch: '#d8dee9' },
 }
 
 /** 径向渐变光环纹理（模块级共享，白色渐变 + tint 上色，只生成一次） */
@@ -206,6 +207,86 @@ export class AvatarSprite {
   private _container: PIXI.Container | null = null
   private _aura: PIXI.Sprite | null = null
   private _acc: PIXI.Text | null = null
+  /** 角色实际绘制包围盒（全局像素），由 drawable 顶点 + drawingMatrix 精确计算 */
+  private _bounds = new PIXI.Rectangle()
+  private _bframe = 0
+  /** drawable 顶点范围（模型单位坐标）。Cubism 画布含大量空白，getBounds 是画布矩形而非角色，配饰定位必须用顶点 */
+  private _verts = { minX: 0, maxX: 0, minY: 0, maxY: 0 }
+
+  /** 扫描全部 drawable 顶点，求模型单位坐标下的真实绘制范围 */
+  private _updateVertexBounds() {
+    const core = (this.model as any)?.internalModel?.coreModel
+    const get = core?.getDrawableVertexPositions?.bind(core) ?? core?.getDrawableVertices?.bind(core)
+    if (!get) return
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    const n = core.getDrawableCount()
+    for (let i = 0; i < n; i++) {
+      const v = get(i)
+      for (let j = 0; j < v.length; j += 2) {
+        const x = v[j], y = v[j + 1]
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+    if (minX < maxX && minY < maxY) this._verts = { minX, maxX, minY, maxY }
+  }
+
+  /**
+   * 收紧交互命中区到角色真实绘制范围（本地坐标静态矩形）。
+   * 关键修复：Live2DModel 默认命中区 = 整个 moc 画布矩形，透明空白区会吞掉触控
+   * （双端靠近时点空白命中的是对方 → 真机"拖不动小人/拖错人"）。
+   * 用本地坐标矩形做 hitArea：不受 idle 动作顶点波动影响，命中稳定。
+   */
+  private _updateHitArea() {
+    if (!this.model) return
+    const im = (this.model as any).internalModel
+    const ct = im?.centeringTransform
+    if (!ct?.apply) return
+    const v = this._verts
+    const p1 = ct.apply(new PIXI.Point(v.minX, v.minY), new PIXI.Point())
+    const p2 = ct.apply(new PIXI.Point(v.maxX, v.maxY), new PIXI.Point())
+    const pad = Math.abs(p2.y - p1.y) * 0.04 // 触屏宽容边（约为角色高度 4%）
+    this.model.hitArea = new PIXI.Rectangle(
+      Math.min(p1.x, p2.x) - pad,
+      Math.min(p1.y, p2.y) - pad,
+      Math.abs(p2.x - p1.x) + pad * 2,
+      Math.abs(p2.y - p1.y) + pad * 2,
+    )
+  }
+
+  /** 角色真实绘制范围（全局像素），App 层触控命中兜底用 */
+  realBounds(): PIXI.Rectangle | null {
+    if (!this.model || !this.model.visible) return null
+    return this._overlayBounds()
+  }
+
+  /**
+   * 角色真实绘制范围（全局像素）。
+   * 实测（Natori）：模型单位顶点经 centeringTransform（PPU 缩放 + 画布居中）得到
+   * PIXI 本地像素，再 toGlobal 得全局像素——角色真实宽度仅约 124px，
+   * 而 getBounds 给出的是 357px 的 moc 画布矩形（含大块空白），配饰会漂到空白处。
+   * 注意：internalModel.drawingMatrix 是渲染器投影矩阵（NDC），不能用于定位。
+   */
+  private _overlayBounds(): PIXI.Rectangle {
+    const im = (this.model as any)?.internalModel
+    const ct = im?.centeringTransform as PIXI.Matrix | undefined
+    if (ct?.apply) {
+      const v = this._verts
+      const p1 = ct.apply(new PIXI.Point(v.minX, v.minY), new PIXI.Point())
+      const p2 = ct.apply(new PIXI.Point(v.maxX, v.maxY), new PIXI.Point())
+      const g1 = this.model!.toGlobal(p1, new PIXI.Point(), true)
+      const g2 = this.model!.toGlobal(p2, new PIXI.Point(), true)
+      return new PIXI.Rectangle(
+        Math.min(g1.x, g2.x),
+        Math.min(g1.y, g2.y),
+        Math.abs(g2.x - g1.x),
+        Math.abs(g2.y - g1.y),
+      )
+    }
+    return this.model!.getBounds(true)
+  }
 
   async load(container: PIXI.Container, url: string, scale: number, tier: QualityTier = 'high') {
     await installResolveUrlMiddleware()
@@ -277,6 +358,8 @@ export class AvatarSprite {
     container.addChild(this.model)
     this._container = container
     this._setupMoodParamDriver()
+    this._updateVertexBounds()
+    this._updateHitArea()
     this.applyStyle(this.style)
     return this.model
   }
@@ -331,13 +414,13 @@ export class AvatarSprite {
         this._clearAcc()
         const t = new PIXI.Text(preset.emoji, { fontSize: 48 })
         t.resolution = 2
-        t.anchor.set(0.5, 0.72)
+        // head 挂点让 emoji 大部分悬于定位点上方（"戴"在头顶）；side/neck 居中贴合
+        t.anchor.set(0.5, preset.anchor === 'head' ? 0.72 : 0.5)
         this._acc = t
         this._container.addChild(t)
       }
-      // 尺寸按模型实际渲染高度定，clamp 防止异常小/大
-      const h = this.model.height
-      const fs = Math.max(22, Math.min(72, h * 0.2))
+      // 尺寸 = 角色真实绘制高度 × 每款 size（🎀🧣 等大字符全尺寸会遮脸，见 E2E 截图校准）
+      const fs = Math.max(20, Math.min(72, this._overlayBounds().height * preset.size))
       if (this._acc.style.fontSize !== fs) this._acc.style.fontSize = fs
       this._acc.visible = true
     } else {
@@ -346,18 +429,23 @@ export class AvatarSprite {
     this._syncOverlay()
   }
 
-  /** 每帧同步覆盖层：光环贴模型中心 + 呼吸脉冲；配饰按挂点跟随 + 轻微摇摆 */
+  /** 每帧同步覆盖层：光环贴角色真实包围盒中心 + 呼吸脉冲；配饰按挂点跟随 + 轻微摇摆 */
   private _syncOverlay() {
     if (!this.model) return
+    // 顶点范围每 15 帧重扫一次（遍历全部 drawable 顶点，逐帧算浪费）；包围盒每帧经 drawingMatrix 重映射
+    if (this._bframe++ % 15 === 0) this._updateVertexBounds()
+    const b = this._overlayBounds()
+    this._bounds = b
+    const cx = b.x + b.width / 2
     const t = performance.now()
     if (this._aura) {
       this._aura.visible = this.model.visible
       if (this._aura.visible) {
-        this._aura.x = this.model.x
-        this._aura.y = this.model.y
-        const d = Math.max(this.model.width, this.model.height) * 1.55
+        this._aura.x = cx
+        this._aura.y = b.y + b.height / 2
+        const d = Math.max(b.width, b.height) * 1.5
         this._aura.scale.set(d / 256)
-        // 轻微呼吸脉冲（±0.06），性能档位低时静止
+        // 轻微呼吸脉冲（±0.06）
         this._aura.alpha = 0.5 + Math.sin(t / 900) * 0.06
       }
     }
@@ -365,17 +453,16 @@ export class AvatarSprite {
       this._acc.visible = this.model.visible
       if (this._acc.visible) {
         const preset = OUTFIT_STYLES[this.style]
-        const w = this.model.width
-        const h = this.model.height
         if (preset.anchor === 'head') {
-          this._acc.x = this.model.x
-          this._acc.y = this.model.y - h * 0.4
+          this._acc.x = cx
+          this._acc.y = b.y + b.height * 0.1
         } else if (preset.anchor === 'side') {
-          this._acc.x = this.model.x + w * 0.24
-          this._acc.y = this.model.y - h * 0.38
+          // 头侧：以身高比例定位（宽臂/双马尾模型的真实宽度会随动作波动，不能用全宽比例）
+          this._acc.x = cx + b.height * 0.09
+          this._acc.y = b.y + b.height * 0.11
         } else {
-          this._acc.x = this.model.x
-          this._acc.y = this.model.y - h * 0.18
+          this._acc.x = cx
+          this._acc.y = b.y + b.height * 0.3
         }
         // 轻微摇摆跟随模型倾斜，营造"戴在身上"的感觉
         this._acc.rotation = this.model.rotation + Math.sin(t / 700) * 0.04
@@ -494,11 +581,20 @@ export class AvatarSprite {
   }
 
   playAction(action: string) {
-    if (!this.model) return false
+    if (!this.model) return
     const m = ACTION_MOTIONS[action] ?? ACTION_MOTIONS.poke
-    const result = this.model.motion(m.group, m.index ?? 0, MotionPriority.FORCE)
-    if (!result) this.model.motion(m.group, 0, MotionPriority.FORCE)
-    return true
+    // 官方免费模型 TapBody 动作数量有限（Hiyori 仅 1 个）：
+    // 对 index 取模钳制到实际存在的动作数内，保证任何互动都必定播出一个动作，
+    // 不同互动在动作多的模型（Natori x5）上仍有差异化表现。
+    const internal = (this.model as any)?.internalModel
+    const defs = internal?.motionManager?.definitions?.[m.group]
+    const count = Array.isArray(defs) ? defs.length : 0
+    if (count <= 0) {
+      // 兜底：连 TapBody 都没有的模型就播 Idle
+      this.model.motion('Idle', 0, MotionPriority.FORCE)
+      return
+    }
+    this.model.motion(m.group, (m.index ?? 0) % count, MotionPriority.FORCE)
   }
 
   /** App.tsx 向后兼容：play() 是 playAction 的别名 */

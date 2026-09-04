@@ -15,8 +15,9 @@ app.post('/api/identity', (req, res) => {
   const { name } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'name required' })
   const id = uuid()
-  // V1.3：创建时随机分配一个形象（Hiyori / Natori），后续可在「我的」里切换
-  const avatar = Math.random() < 0.5 ? 'hiyori' : 'natori'
+  // V1.3.2：创建时随机分配一个形象（形象库见 client/src/live2d/models.ts）
+  const INITIAL_AVATARS = ['hiyori', 'natori', 'haru']
+  const avatar = INITIAL_AVATARS[Math.floor(Math.random() * INITIAL_AVATARS.length)]
   q.insertUser.run(id, name.trim(), avatar)
   res.json({ user: q.getUser.get(id) })
 })
@@ -42,6 +43,11 @@ app.post('/api/invite/:code/accept', (req, res) => {
   if (!inviterUser || !q.getUser.get(userId))
     return res.status(404).json({ error: 'user not found' })
   if (!q.getBond.get(inviter, userId, inviter, userId)) {
+    // V1.3.2 一人一伴：任一方已与其他人绑定则拒绝（否则会产生多条 bond，
+    // getPartner 永远返回旧对象，表现为"邀请链接没用"）
+    const b1 = q.bondsOf.get(inviter, inviter)
+    const b2 = q.bondsOf.get(userId, userId)
+    if (b1 || b2) return res.status(409).json({ error: 'already_bound' })
     q.insertBond.run(uuid(), inviter, userId)
   }
   // 通知双方

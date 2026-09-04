@@ -303,7 +303,9 @@ body,
   border: none;
   background: transparent;
   color: var(--text);
-  padding: 8px 10px;
+  /* 触控目标 ≥44px（loop engineering：真机菜单按钮太小难点中） */
+  min-height: 44px;
+  padding: 10px 10px;
   border-radius: 10px;
   font-size: 14px;
   cursor: pointer;

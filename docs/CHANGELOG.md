@@ -2,6 +2,64 @@
 
 > 约定：每次文档/功能迭代，在此追加一条记录；文档改动同时在 `versions/` 存一份带时间戳的不可变副本。
 
+## [V1.3.4] 2026-09-04 20:10（master）—— 换装失败兜底 + 五项全量回归通过
+
+> 五项用户反馈的 loop engineering 收尾：全量 E2E 复验通过后，补齐换装失败路径的兜底（此前 `swap` 先销毁旧模型再加载新模型，一旦加载失败旧形象已销毁且 applyAvatar 仍会误报成功并持久化）。
+
+### 换装失败兜底（[App.tsx](../client/src/App.tsx)）
+- `swapMyModel` 返回布尔成功标志；失败时回滚 `meAvatarRef` 到旧 key并重新加载旧模型（不留空白舞台），恢复位置与心情
+- `applyAvatar` 失败即 toast「换装失败，请稍后重试」并 return——不写 localStorage / 不调 setLook / 不发 state_update，避免"实际没换上但服务器记了新形象"的状态漂移
+- `swapPartnerLook` 补 `.catch`，对方模型加载失败只记日志，不产生 unhandled rejection
+
+### 全量回归记录（puppeteer-core E2E，430×860）
+- 换形象：随机初始 natori → 衣橱点 Haru → toast「已换上 Haru · 阳光少年」✅，localStorage 与 GET /api/state 均为 haru ✅
+- 拖拽 138→288 ✅、长按菜单弹出 ✅、邀请 200/409/200 ✅、抱抱 TapBody+气泡 ✅、配饰 side 挂点误差 ≤5px ✅
+- 复查说明：E2E 中"我的"Tab 面板会盖住舞台拦截指针——脚本需先切回陪伴 Tab 再测拖拽/长按（应用行为正常）
+
+## [V1.3.3] 2026-09-04 19:30（master，待部署）—— 五项用户反馈 Loop Engineering：触控命中重构 + 邀请同步 + 定位校准
+
+> 用户真机反馈五点：①点抱抱等按钮不出动作 ②换装位置不对 ③双端同步邀请链接没用 ④无法拖拽小人/菜单没看到 ⑤如何替换分身形象。逐模块 loop engineering（puppeteer-core E2E + 截图验证），五个问题全部定位并修复。
+
+### 关键修复：触控命中区（④的根因，影响拖拽/长按/菜单）
+- **Live2DModel 默认交互命中区 = 整个 moc 画布矩形**（含大块透明空白）——双端靠近时，对方画布的空白区会吞掉点击，`hitTest` 返回对方 → 真机表现为"拖不动自己的小人/拖错人"
+- 修复（[avatar.ts](../client/src/live2d/avatar.ts)）：加载时扫描全部 drawable 顶点求**角色真实绘制范围**（本地坐标静态矩形，不受 idle 动作顶点波动影响），写入 `model.hitArea` + 4% 触屏宽容边
+- `pick()` 重构（[App.tsx](../client/src/App.tsx)）：几何命中（hitTest 沿 parent 链归到模型，PIXI 6 返回的是子节点不是模型本身）最优先 → 就近中心兜底（用真实绘制范围，不能用 getBounds 画布矩形）；双人位置 35%/65% → **32%/68%** 减少边界互叠
+- 双人场景实测：拖自己 138→370 ✓、partner 纹丝不动 ✓、点空白区不再误命中 ✓
+
+### 换装定位校准（②）
+- **根因**：`getBounds` 返回的是 moc 画布矩形（Natori 画布 357px 宽，角色实际只有约 124px）——配饰按画布比例定位会漂进空白区
+- 修复：drawable 顶点（模型单位）经 `internalModel.centeringTransform`（PPU 缩放+画布居中）映射到 PIXI 本地像素，再 `toGlobal` 得全局像素；`drawingMatrix` 是渲染器投影矩阵（NDC），不能用于定位（踩坑记录）
+- **每款配饰独立 `size` 参数**（E2E 截图校准）：🎀蝴蝶结/🧣围巾全尺寸会遮脸，分别调至 0.11/0.12；side 挂点改用**身高比例**（宽臂/双马尾模型宽度随动作波动不可靠）
+- 截图验证：🧢 头顶 ✓、🎀 头侧不遮脸 ✓、🧣 颈胸 ✓、光环跟随 ✓
+
+### 邀请与双端同步（③）
+- **服务端**（[index.js](../server/src/index.js)）：一人一伴——接受邀请前检查任一方是否已绑定，是则 409 `already_bound`（之前重复接受产生多条 bond，旧记录遮住新邀请）
+- `bondsOf` 只取**最新**一条 bond（[db.js](../server/src/db.js)），存量脏数据兜底
+- **客户端补 `bonded` socket 处理器**（[App.tsx](../client/src/App.tsx)）：TA 接受邀请时服务端向邀请人推 `bonded`，之前客户端没接这个事件——邀请人已打开的页面永远不显示对方（"邀请链接没用"的另一半根因）
+- API 级 E2E：接受 200 ✓ / 第三人插足 409 ✓ / 同对重复接受 200 ✓
+
+### 动作与加载（①+性能）
+- 动作复验：点抱抱 → `model.motion('TapBody', index, FORCE)` 实际触发（E2E 钩子捕获）+ 气泡反馈 ✓；官方模型 TapBody 数量有限，`playAction` 已按实际动作数取模钳制
+- **修模型重复加载**：初始形象直接同步读 localStorage（[App.tsx](../client/src/App.tsx)），不依赖身份 effect 执行次序——杜绝"先载默认形象再换"的双重首屏开销
+- 服务器重启后 409 生效（此前 8090 跑旧代码，验证时发现）
+
+### 形象库（⑤）
+- **配置化**：[models.ts](../client/src/live2d/models.ts) 统一维护 `AVATAR_LIBRARY`（id/label/tag/path），新增形象 = 模型文件放 `client/public/models/<名>/` + models.ts 加一条，业务代码零改动；当前库：Hiyori🌸元气少女 / Natori🌙沉稳御姐 / Haru☀️阳光少年，新账号随机三选一
+
+### 验证记录（puppeteer-core E2E，430×860 视口）
+- 拖拽：按住自己分身拖动 model.x 138→370，对方不动，无回弹 ✅
+- 长按菜单 550ms 弹出 `.ctxmenu` ✅（此前 E2E 失败是旧 dist 所致）
+- 动作：抱抱按钮 → TapBody FORCE 播放 + 气泡「抱抱！🤗」✅
+- 邀请：200/409/200 三态 ✅；穿搭：三挂点截图 ✅
+- ⏳ 真机复核：手机拖拽/长按/换装手感 + 双设备邀请实时绑定
+
+## [V1.3.2] 2026-09-04 13:40（master）—— 触控重构 + 形象库配置化 + 邀请防呆
+
+- **触控绑定重构**（[App.tsx](../client/src/App.tsx)）：PIXI interaction 的 pointer 事件在触屏上不可靠 → DOM 指针事件 + 显式命中测试，拖拽/长按菜单/右键菜单统一绑定一次（换装/换形象无需重绑）；`touch-action: none` 防 pointercancel；clientY 差值替代 movementX（触屏常为 undefined → NaN）
+- **形象库配置化**：新增 [models.ts](../client/src/live2d/models.ts)（`AVATAR_LIBRARY`/`MODEL_URLS`/`AVATAR_LABELS`），Haru☀️阳光少年入库，新账号随机三选一
+- **邀请防呆**（服务端）：一人一伴检查 + `bondsOf` 取最新 + 409 `already_bound`；客户端邀请弹窗手动复制兜底
+- 穿搭 state 持久化恢复、对方换装实时跟随（`state_update` 携带 avatar/style）
+
 ## [V1.3.1] 2026-09-04 09:45（master，已部署）—— 换装肤色安全重构 + 加载性能 + 触控巡检
 
 > 用户反馈三点：**"肤色不能变，穿搭可以变"**（V1.3.0 全模型 ColorMatrixFilter 会把脸和肤色一起染色）+ 渲染加载慢 + 手点可能出问题。对每个小模块 loop engineering 一遍，UI 设计参考 ui-ux-pro-max 技能。

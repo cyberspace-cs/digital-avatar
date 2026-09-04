@@ -66,7 +66,12 @@ export const q = {
   getBond: db.prepare(
     `SELECT * FROM bonds WHERE (user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?)`,
   ),
-  bondsOf: db.prepare('SELECT * FROM bonds WHERE user_a = ? OR user_b = ?'),
+  // V1.3.2：只取"最新"一条 bond —— 之前重复接受邀请会产生多条记录，
+  // 旧测试 bond 会遮住新邀请（表现为"邀请链接没用"），这里按创建时间倒序兜底
+  bondsOf: db.prepare(
+    `SELECT * FROM bonds WHERE user_a = ? OR user_b = ?
+     ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+  ),
   setState: db.prepare(
     `INSERT INTO states (user_id, mood, visibility) VALUES (?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET mood = excluded.mood, visibility = excluded.visibility, updated_at = datetime('now','localtime')`,
