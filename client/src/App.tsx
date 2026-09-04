@@ -137,9 +137,14 @@ export default function App() {
       setMe(u)
       // V1.3 换装：向服务端对齐形象与穿搭（localStorage 里可能没有 style 列）
       api.getState(u.id).then((r) => {
-        if (r.style && r.style !== 'default') {
+        // V1.4.0：服务端 style 与本地持久化不一致时才重载模型（一致则初始加载已带风格，零额外开销）
+        const localStyle = localStorage.getItem('da_style') ?? 'default'
+        if (r.style && r.style !== 'default' && r.style !== localStyle) {
           setMyStyle(r.style)
+          localStorage.setItem('da_style', r.style)
           meSprite.current?.applyStyle(r.style)
+        } else if (r.style && r.style !== 'default') {
+          setMyStyle(r.style)
         }
         if (r.avatar && r.avatar !== meAvatarRef.current) {
           // 服务端的形象更新（比如换过设备）
@@ -204,6 +209,11 @@ export default function App() {
       const savedAvatar = JSON.parse(localStorage.getItem('da_me') || 'null')?.avatar
       if (savedAvatar && MODEL_URLS[savedAvatar]) meAvatarRef.current = savedAvatar
     } catch { /* 忽略坏数据 */ }
+    // V1.4.0 真实换装：初始加载即带穿搭风格（同步读 localStorage，避免"先原生再重载"的双重加载）
+    try {
+      const savedStyle = localStorage.getItem('da_style')
+      if (savedStyle && (OUTFIT_STYLES as any)[savedStyle]) meS.style = savedStyle
+    } catch { /* 忽略坏数据 */ }
     meS.load(app.stage, MODEL_URLS[meAvatarRef.current] ?? MODEL_URLS[DEFAULT_AVATAR], MODEL_SCALE, tier).then(() => {
       meS.setPosition(window.innerWidth * 0.32, window.innerHeight * 0.78)
         ; (window as any).__stageReady = true
@@ -219,6 +229,9 @@ export default function App() {
       partnerLoading = true
       const pAvatar = stateRef.current.partner?.avatar ?? 'natori'
       partnerAvatarRef.current = pAvatar
+      // V1.4.0：加载前就设置对方穿搭风格（避免"先原生再重载"的双重加载）
+      const pStyle = stateRef.current.partner?.style
+      if (pStyle && (OUTFIT_STYLES as any)[pStyle]) partnerS.style = pStyle
       partnerS.load(app.stage, MODEL_URLS[pAvatar] ?? MODEL_URLS.natori, MODEL_SCALE, tier).then(() => {
         partnerS.setPosition(window.innerWidth * 0.68, window.innerHeight * 0.78)
         // 加载完成时按当前状态决定可见性与表情（getPartner 可能早已返回，竞态兜底）
@@ -226,8 +239,6 @@ export default function App() {
         const st = stateRef.current
         if (st.bond?.cold) partnerS.setMood('low')
         else partnerS.setMood(st.partnerMood ?? 'neutral')
-        // V1.3：恢复对方的穿搭风格
-        partnerS.applyStyle(st.partner?.style ?? 'default')
       })
     }
     partnerLoaderRef.current = loadPartnerModel
@@ -665,14 +676,18 @@ export default function App() {
     setToast(`已换上 ${AVATAR_LABELS[key] ?? key}`)
   }
 
-  /** 切换穿搭风格（配饰+光环，肤色不变），双端同步 */
+  /** 切换穿搭风格（V1.4.0 真实换装：重染服装纹理，肤色不变），双端同步 */
   const applyStyleLocal = async (styleId: string) => {
     if (!me) return
     setMyStyle(styleId)
-    meSprite.current?.applyStyle(styleId)
+    localStorage.setItem('da_style', styleId)
+    const label = OUTFIT_STYLES[styleId]?.label ?? styleId
+    setToast(styleId === 'default' ? '换回原生…' : `换装中：${label}…`)
+    // applyStyle 内部保持位置/可见性/心情，重载完成即新配色生效
+    await meSprite.current?.applyStyle(styleId)
     api.setLook(me.id, { style: styleId }).catch(() => {})
     emit('state_update', { userId: me.id, style: styleId })
-    setToast(`穿搭：${OUTFIT_STYLES[styleId]?.label ?? styleId}`)
+    setToast(styleId === 'default' ? '已换回原生' : `已换上 ${label}`)
   }
 
   /** 对方换装（socket 通知到达时换 TA 的模型/穿搭） */
@@ -680,8 +695,9 @@ export default function App() {
     const app = appRef.current
     const sprite = partnerSprite.current
     if (!app || !sprite) return
-    if (look.style) sprite.applyStyle(look.style)
     if (look.avatar && partnerAvatarRef.current !== look.avatar && MODEL_URLS[look.avatar]) {
+      // 形象+风格一起换：先同步记录 style（load 时按它重染），单次加载避免双开
+      if (look.style && (OUTFIT_STYLES as any)[look.style]) sprite.style = look.style
       const home = { ...sprite.home }
       partnerAvatarRef.current = look.avatar
       sprite
@@ -694,6 +710,9 @@ export default function App() {
           else sprite.setMood(st.partnerMood ?? 'neutral')
         })
         .catch((e) => console.error('[swap] 对方形象加载失败', e))
+    } else if (look.style) {
+      // 仅换风格：applyStyle 内部按原参数重载（保持位置/可见性/心情）
+      sprite.applyStyle(look.style).catch((e) => console.error('[swap] 对方换装失败', e))
     }
   }
 
@@ -910,12 +929,12 @@ export default function App() {
                       aria-pressed={myStyle === id}
                       onClick={() => applyStyleLocal(id)}
                     >
-                      <span className="style-emoji">{p.emoji || '🌱'}</span>
+                      <span className="style-emoji">{p.swatch === '#c9c9d6' ? '🌱' : '👗'}</span>
                       <span className="style-label">{p.label}</span>
                     </button>
                   ))}
                 </div>
-                <p className="sub tiny">配饰 + 气场穿搭，肤色永远不变；会实时同步到 TA 的屏幕上</p>
+                <p className="sub tiny">真实换装：服装整体换色，肤色永远不变；会实时同步到 TA 的屏幕上</p>
               </div>
               <div className="panel-card">
                 <button className="btn block" onClick={() => setShowMoodPicker(true)}>

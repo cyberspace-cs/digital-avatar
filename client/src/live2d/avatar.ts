@@ -2,6 +2,7 @@ import * as PIXI from 'pixi.js'
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4'
 import type { Mood } from '../types'
 import { type QualityTier } from './perf'
+import { OUTFIT_STYLES, avatarIdFromUrl, recolorOutfitTextures } from './outfit'
 
 // Live2DFactory 在 cubism4 模块内导出（不挂 window / Live2DModel.constructor），
 // 这里动态 import 拿到模块命名空间，在运行时挂中间件。
@@ -147,46 +148,14 @@ const MOOD_PARAMS: Record<Mood, Array<{ id: string; v: number; mode: 'abs' | 'mu
 const MOOD_PARAM_TAU = 120
 
 /**
- * 穿搭风格（V1.3.1 肤色安全版）。
+ * 穿搭风格（V1.4.0 真实换装版）。
  *
- * V1.3.0 曾用 ColorMatrixFilter 全模型滤镜——肤色/脸也会跟着变色，被用户否决。
- * 新方案：**配饰（emoji 跟随头顶/侧边/脖子）+ 身后光环（径向渐变 tint）**，
- * 模型本身的任何像素都不改，肤色永远不会变。
- *
- * - `emoji`：配饰符号，空串表示无配饰
- * - `aura`：光环颜色（0xRRGGBB），0 表示无光环
- * - `anchor`：配饰挂点 head=头顶 / side=头侧 / neck=脖子
- * - `size`：配饰尺寸 = 角色真实绘制高度 × size（E2E 截图校准：🎀🧣 全尺寸会遮脸）
- * - `swatch`：UI 色板展示色（与光环同色系）
+ * 历史：V1.3.0 ColorMatrixFilter 全模型滤镜——肤色一起变色，被否决；
+ *       V1.3.1 emoji 配饰+光环——用户反馈"位置不对，想要的是换装"；
+ *       V1.4.0 纹理级选择性重上色：服装像素换色、肤色像素零改动（实现见 outfit.ts）。
+ * 这里只保留 UI 需要的 label/swatch（完整定义在 outfit.ts，re-export 兼容旧引用）。
  */
-export const OUTFIT_STYLES: Record<
-  string,
-  { label: string; emoji: string; aura: number; anchor: 'head' | 'side' | 'neck'; size: number; swatch: string }
-> = {
-  default: { label: '原生', emoji: '', aura: 0, anchor: 'head', size: 0.2, swatch: '#c9c9d6' },
-  sakura: { label: '蝴蝶结', emoji: '🎀', aura: 0xff9ec4, anchor: 'side', size: 0.11, swatch: '#ff9ec4' },
-  ocean: { label: '小蓝帽', emoji: '🧢', aura: 0x6cc3ff, anchor: 'head', size: 0.15, swatch: '#6cc3ff' },
-  sunset: { label: '向日葵', emoji: '🌻', aura: 0xffb26b, anchor: 'side', size: 0.12, swatch: '#ffb26b' },
-  night: { label: '小皇冠', emoji: '👑', aura: 0xa78bfa, anchor: 'head', size: 0.13, swatch: '#a78bfa' },
-  mono: { label: '小围巾', emoji: '🧣', aura: 0xd8dee9, anchor: 'neck', size: 0.12, swatch: '#d8dee9' },
-}
-
-/** 径向渐变光环纹理（模块级共享，白色渐变 + tint 上色，只生成一次） */
-let auraTexture: PIXI.Texture | null = null
-function getAuraTexture(): PIXI.Texture {
-  if (auraTexture) return auraTexture
-  const c = document.createElement('canvas')
-  c.width = c.height = 256
-  const ctx = c.getContext('2d')!
-  const g = ctx.createRadialGradient(128, 128, 8, 128, 128, 128)
-  g.addColorStop(0, 'rgba(255,255,255,0.5)')
-  g.addColorStop(0.45, 'rgba(255,255,255,0.18)')
-  g.addColorStop(1, 'rgba(255,255,255,0)')
-  ctx.fillStyle = g
-  ctx.fillRect(0, 0, 256, 256)
-  auraTexture = PIXI.Texture.from(c)
-  return auraTexture
-}
+export { OUTFIT_STYLES } from './outfit'
 
 export class AvatarSprite {
   model: Live2DModel | null = null
@@ -203,12 +172,10 @@ export class AvatarSprite {
   /** 按模型解析好的心情参数（跳过模型不存在的参数） */
   private _moodDefs = new Map<Mood, Array<{ idx: number; v: number; mode: 'abs' | 'mul' }>>()
   private _moodLastTs = 0
-  /** 穿搭覆盖层：光环（模型身后）+ 配饰（模型身前），V1.3.1 肤色安全 */
+  /** 模型所在容器（applyStyle 重载需要） */
   private _container: PIXI.Container | null = null
-  private _aura: PIXI.Sprite | null = null
-  private _acc: PIXI.Text | null = null
-  /** 角色实际绘制包围盒（全局像素），由 drawable 顶点 + drawingMatrix 精确计算 */
-  private _bounds = new PIXI.Rectangle()
+  /** 最近一次 load 参数：applyStyle 切风格时按原参数重载模型（重染纹理） */
+  private _lastLoad: { container: PIXI.Container; url: string; scale: number; tier: QualityTier } | null = null
   private _bframe = 0
   /** drawable 顶点范围（模型单位坐标）。Cubism 画布含大量空白，getBounds 是画布矩形而非角色，配饰定位必须用顶点 */
   private _verts = { minX: 0, maxX: 0, minY: 0, maxY: 0 }
@@ -218,9 +185,13 @@ export class AvatarSprite {
     const core = (this.model as any)?.internalModel?.coreModel
     const get = core?.getDrawableVertexPositions?.bind(core) ?? core?.getDrawableVertices?.bind(core)
     if (!get) return
+    // 关键过滤：Natori/Haru 等 moc 里有大量 op=0 的停用部件（陈设/备用服装），
+    // 停在画布边缘远处，不剔除会把包围盒撑到整张画布（配饰定位/命中区全错）
+    const opacity = core.getDrawableOpacity?.bind(core)
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
     const n = core.getDrawableCount()
     for (let i = 0; i < n; i++) {
+      if (opacity && opacity(i) <= 0) continue
       const v = get(i)
       for (let j = 0; j < v.length; j += 2) {
         const x = v[j], y = v[j + 1]
@@ -234,19 +205,24 @@ export class AvatarSprite {
   }
 
   /**
-   * 收紧交互命中区到角色真实绘制范围（本地坐标静态矩形）。
-   * 关键修复：Live2DModel 默认命中区 = 整个 moc 画布矩形，透明空白区会吞掉触控
+   * 收紧交互命中区到角色真实绘制范围（模型本地坐标静态矩形）。
+   * 关键修复 1：Live2DModel 默认命中区 = 整个 moc 画布矩形，透明空白区会吞掉触控
    * （双端靠近时点空白命中的是对方 → 真机"拖不动小人/拖错人"）。
-   * 用本地坐标矩形做 hitArea：不受 idle 动作顶点波动影响，命中稳定。
+   * 关键修复 2：坐标系——centeringTransform 输出的是【内部容器】空间（原点=画布左上角），
+   * 而 hitArea 需要的是【模型本地】空间（原点=锚点）。直接把 ct 结果当 hitArea 会整体
+   * 偏移一个画布中心（实测角色在左、命中区飘到右下空白）。正确做法：顶点 → ct →
+   * toGlobal 得全局矩形，再 toLocal 回模型本地空间。
    */
   private _updateHitArea() {
     if (!this.model) return
-    const im = (this.model as any).internalModel
-    const ct = im?.centeringTransform
-    if (!ct?.apply) return
-    const v = this._verts
-    const p1 = ct.apply(new PIXI.Point(v.minX, v.minY), new PIXI.Point())
-    const p2 = ct.apply(new PIXI.Point(v.maxX, v.maxY), new PIXI.Point())
+    const g = this._overlayBounds()
+    const p1 = this.model.toLocal(new PIXI.Point(g.x, g.y), undefined, new PIXI.Point(), true)
+    const p2 = this.model.toLocal(
+      new PIXI.Point(g.x + g.width, g.y + g.height),
+      undefined,
+      new PIXI.Point(),
+      true,
+    )
     const pad = Math.abs(p2.y - p1.y) * 0.04 // 触屏宽容边（约为角色高度 4%）
     this.model.hitArea = new PIXI.Rectangle(
       Math.min(p1.x, p2.x) - pad,
@@ -322,6 +298,20 @@ export class AvatarSprite {
       this._blobUrls = result.blobUrls || []
       finalSource = result.model3 as object
 
+      // V1.4.0 真实换装：非 default 风格 → 对服装纹理做选择性重染（肤色像素零改动），
+      // 原位替换 blobMap 中的纹理条目，模型加载管线零侵入
+      try {
+        const { replaced, ownedUrls } = await recolorOutfitTextures(
+          result.blobMap ?? {},
+          avatarIdFromUrl(url),
+          this.style,
+        )
+        this._blobUrls.push(...ownedUrls)
+        if (replaced) console.info(`[outfit] style=${this.style} 重染 ${replaced} 张纹理`)
+      } catch (e) {
+        console.warn('[outfit] 重染流程失败，保持原生', e)
+      }
+
       // 注册 {settings → blobMap} 关联：在 jsonToSettings 刚执行完时匹配 settings.json
       // （构造时 settings.json = context.source = result.model3，是同一个对象引用）
       const relMap = new Map<string, string>(Object.entries(result.blobMap || {}))
@@ -357,17 +347,16 @@ export class AvatarSprite {
     this.model.interactive = true
     container.addChild(this.model)
     this._container = container
+    this._lastLoad = { container, url, scale, tier }
     this._setupMoodParamDriver()
     this._updateVertexBounds()
     this._updateHitArea()
-    this.applyStyle(this.style)
     return this.model
   }
 
   /**
    * 换装（V1.3）：销毁当前模型并加载新 model3。
    * 位置/可见性/心情由 App 层在 swap 完成后恢复。
-   * 覆盖层（光环/配饰）随旧模型一并清理，加载完按当前 style 重建。
    */
   async swap(container: PIXI.Container, url: string, scale: number, tier: QualityTier = 'high') {
     if (this.model) {
@@ -376,7 +365,6 @@ export class AvatarSprite {
       this.model.destroy()
       this.model = null
     }
-    this._clearOverlay()
     this._moodCur.clear()
     this._moodDefs.clear()
     this._worker?.terminate()
@@ -386,109 +374,23 @@ export class AvatarSprite {
   }
 
   /**
-   * 应用穿搭风格（V1.3.1 肤色安全）：配饰 emoji + 身后光环 tint。
-   * 不再对模型加任何 filter——模型像素零改动，肤色不变。
-   * 模型未加载时仅记录 style，load/swap 完成后自动生效。
+   * 应用穿搭风格（V1.4.0 真实换装）：重染服装纹理需要重建模型纹理，
+   * 按最近一次 load 参数整体重载（SW 缓存 + 重染结果缓存，二次切换秒开）。
+   * 模型未加载时仅记录 style，load 时自动生效。
+   * @returns 是否发生了重载（App 层据此恢复位置/心情）
    */
-  applyStyle(styleId: string) {
-    this.style = OUTFIT_STYLES[styleId] ? styleId : 'default'
-    const preset = OUTFIT_STYLES[this.style]
-    if (!this.model || !this._container) return
-
-    // 光环：径向渐变 sprite，置于模型身后（stage 最底层）
-    if (preset.aura) {
-      if (!this._aura) {
-        this._aura = new PIXI.Sprite(getAuraTexture())
-        this._aura.anchor.set(0.5)
-        this._container.addChildAt(this._aura, 0)
-      }
-      this._aura.tint = preset.aura
-      this._aura.visible = this.model.visible
-    } else {
-      this._clearAura()
-    }
-
-    // 配饰：emoji Text，置于模型身前（跟随头顶/侧边/脖子）
-    if (preset.emoji) {
-      if (!this._acc || this._acc.text !== preset.emoji) {
-        this._clearAcc()
-        const t = new PIXI.Text(preset.emoji, { fontSize: 48 })
-        t.resolution = 2
-        // head 挂点让 emoji 大部分悬于定位点上方（"戴"在头顶）；side/neck 居中贴合
-        t.anchor.set(0.5, preset.anchor === 'head' ? 0.72 : 0.5)
-        this._acc = t
-        this._container.addChild(t)
-      }
-      // 尺寸 = 角色真实绘制高度 × 每款 size（🎀🧣 等大字符全尺寸会遮脸，见 E2E 截图校准）
-      const fs = Math.max(20, Math.min(72, this._overlayBounds().height * preset.size))
-      if (this._acc.style.fontSize !== fs) this._acc.style.fontSize = fs
-      this._acc.visible = true
-    } else {
-      this._clearAcc()
-    }
-    this._syncOverlay()
-  }
-
-  /** 每帧同步覆盖层：光环贴角色真实包围盒中心 + 呼吸脉冲；配饰按挂点跟随 + 轻微摇摆 */
-  private _syncOverlay() {
-    if (!this.model) return
-    // 顶点范围每 15 帧重扫一次（遍历全部 drawable 顶点，逐帧算浪费）；包围盒每帧经 drawingMatrix 重映射
-    if (this._bframe++ % 15 === 0) this._updateVertexBounds()
-    const b = this._overlayBounds()
-    this._bounds = b
-    const cx = b.x + b.width / 2
-    const t = performance.now()
-    if (this._aura) {
-      this._aura.visible = this.model.visible
-      if (this._aura.visible) {
-        this._aura.x = cx
-        this._aura.y = b.y + b.height / 2
-        const d = Math.max(b.width, b.height) * 1.5
-        this._aura.scale.set(d / 256)
-        // 轻微呼吸脉冲（±0.06）
-        this._aura.alpha = 0.5 + Math.sin(t / 900) * 0.06
-      }
-    }
-    if (this._acc) {
-      this._acc.visible = this.model.visible
-      if (this._acc.visible) {
-        const preset = OUTFIT_STYLES[this.style]
-        if (preset.anchor === 'head') {
-          this._acc.x = cx
-          this._acc.y = b.y + b.height * 0.1
-        } else if (preset.anchor === 'side') {
-          // 头侧：以身高比例定位（宽臂/双马尾模型的真实宽度会随动作波动，不能用全宽比例）
-          this._acc.x = cx + b.height * 0.09
-          this._acc.y = b.y + b.height * 0.11
-        } else {
-          this._acc.x = cx
-          this._acc.y = b.y + b.height * 0.3
-        }
-        // 轻微摇摆跟随模型倾斜，营造"戴在身上"的感觉
-        this._acc.rotation = this.model.rotation + Math.sin(t / 700) * 0.04
-      }
-    }
-  }
-
-  private _clearAura() {
-    if (this._aura) {
-      this._aura.parent?.removeChild(this._aura)
-      this._aura.destroy()
-      this._aura = null
-    }
-  }
-
-  private _clearAcc() {
-    if (this._acc) {
-      this._acc.parent?.removeChild(this._acc)
-      this._acc.destroy()
-      this._acc = null
-    }
-  }
-
-  private _clearOverlay() {
-    this._clearAura()
-    this._clearAcc()
+  async applyStyle(styleId: string): Promise<boolean> {
+    const next = OUTFIT_STYLES[styleId] ? styleId : 'default'
+    const prev = this.style
+    this.style = next
+    if (next === prev || !this.model || !this._container || !this._lastLoad) return false
+    const { container, url, scale, tier } = this._lastLoad
+    // 记住当前姿态：重载后原位恢复，不做"回家"跳动；可见性一并保持（partner 可能处于隐藏态）
+    const px = this.model.x, py = this.model.y, pv = this.model.visible
+    await this.swap(container, url, scale, tier)
+    if (this.model) { this.model.x = px; this.model.y = py; this.model.visible = pv }
+    this.setMood(this.mood)
+    return true
   }
 
   /** 把 MOOD_PARAMS 解析成参数下标（跳过模型不存在的参数），挂 beforeModelUpdate 驱动 */
@@ -629,7 +531,8 @@ export class AvatarSprite {
       this.model.x += (this.target.x - this.model.x) * this.lerpSpeed * d
       this.model.y += (this.target.y - this.model.y) * this.lerpSpeed * d
     }
-    this._syncOverlay()
+    // 顶点范围每 15 帧重扫一次（idle 动作会让顶点缓慢波动，命中区/包围盒需要跟进）
+    if (this._bframe++ % 15 === 0) this._updateVertexBounds()
   }
 
   /** App.tsx 兼容：PixiJS app.ticker.add() 不传参也能工作；setPosition = setAnchor 但不设 target */
@@ -655,8 +558,8 @@ export class AvatarSprite {
     this._blobUrls = []
     this._worker?.terminate()
     this._worker = null
-    this._clearOverlay()
     this._container = null
+    this._lastLoad = null
     if (this.model) {
       const p = this.model.parent
       p?.removeChild(this.model)
