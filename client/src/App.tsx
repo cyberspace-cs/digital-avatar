@@ -1,17 +1,25 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import * as PIXI from 'pixi.js'
 import './pixi-setup'
-import { AvatarSprite } from './live2d/avatar'
+import { AvatarSprite, OUTFIT_STYLES } from './live2d/avatar'
 import { PerfGovernor } from './live2d/perf'
+import type { QualityTier } from './live2d/perf'
 import { api } from './api'
 import { connectSocket, emit, getSocket } from './socket'
 import Admin from './Admin'
 import type { BondMeta, InteractionEvent, Mood, QuestItem, User, Visibility } from './types'
 
 // 模型路径需带 base 前缀（生产部署在 /digital-avatar/ 子路径下）
+// V1.3 换装：形象可在 Hiyori / Natori 间切换，按 users.avatar 渲染
 const BASE = import.meta.env.BASE_URL
-const MY_MODEL = `${BASE}models/hiyori/Hiyori.model3.json`
-const PARTNER_MODEL = `${BASE}models/natori/Natori.model3.json`
+const MODELS: Record<string, string> = {
+  hiyori: `${BASE}models/hiyori/Hiyori.model3.json`,
+  natori: `${BASE}models/natori/Natori.model3.json`,
+}
+const AVATAR_LABELS: Record<string, string> = {
+  hiyori: 'Hiyori · 活泼',
+  natori: 'Natori · 沉稳',
+}
 const MODEL_SCALE = 0.12
 
 type MenuPos = { x: number; y: number; target: 'me' | 'partner' } | null
@@ -103,9 +111,16 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('companion')
   const [bond, setBond] = useState<BondMeta | null>(null)
   const [quests, setQuests] = useState<QuestItem[]>([])
+  // V1.3 换装：自己的穿搭风格（形象跟 me.avatar 走）
+  const [myStyle, setMyStyle] = useState('default')
 
-  // 对方 Live2D 模型懒加载器：未绑定用户不加载 Natori（省一半首屏带宽），绑定后才拉起
+  // 对方 Live2D 模型懒加载器：未绑定用户不加载对方模型（省一半首屏带宽），绑定后才拉起
   const partnerLoaderRef = useRef<(() => void) | null>(null)
+  // V1.3 换装：当前已加载的形象 + 帧率档位（swap 时按当前档位选纹理 LOD）+ 拖拽解绑器
+  const meAvatarRef = useRef<string>('hiyori')
+  const partnerAvatarRef = useRef<string | null>(null)
+  const governorRef = useRef<PerfGovernor | null>(null)
+  const dragDisposers = useRef<{ me?: () => void; partner?: () => void }>({})
 
   const stateRef = useRef({ mood, visibility, me, partner, partnerMood, bond })
   stateRef.current = { mood, visibility, me, partner, partnerMood, bond }
@@ -124,7 +139,23 @@ export default function App() {
     const invite = url.searchParams.get('invite')
     if (saved) {
       const u = JSON.parse(saved)
+      meAvatarRef.current = u.avatar ?? 'hiyori'
       setMe(u)
+      // V1.3 换装：向服务端对齐形象与穿搭（localStorage 里可能没有 style 列）
+      api.getState(u.id).then((r) => {
+        if (r.style && r.style !== 'default') {
+          setMyStyle(r.style)
+          meSprite.current?.applyStyle(r.style)
+        }
+        if (r.avatar && r.avatar !== meAvatarRef.current) {
+          // 服务端的形象更新（比如换过设备）
+          meAvatarRef.current = r.avatar
+          const nu = { ...u, avatar: r.avatar }
+          setMe(nu)
+          localStorage.setItem('da_me', JSON.stringify(nu))
+          swapMyModel(r.avatar)
+        }
+      }).catch(() => {})
       if (invite) {
         api.acceptInvite(invite, u.id).then((r) => {
           setToast(`收到 ${r.partner.name} 送你的数字分身！`)
@@ -135,6 +166,7 @@ export default function App() {
     } else {
       ; (window as any).__pendingInvite = invite
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ---------- 初始化 Pixi 舞台 ----------
@@ -158,14 +190,15 @@ export default function App() {
     // tier 同步传给 AvatarSprite.load，用于纹理 LOD（balanced/saver → SD 半图）
     const governor = new PerfGovernor(app)
     const tier = governor.current
+    governorRef.current = governor
 
     const meS = new AvatarSprite()
     const partnerS = new AvatarSprite()
     meSprite.current = meS
     partnerSprite.current = partnerS
 
-    // 自己的模型立即加载；对方的模型懒加载（绑定后才拉起，未绑定用户首屏减半）
-    meS.load(app.stage, MY_MODEL, MODEL_SCALE, tier).then(() => {
+    // 自己的模型立即加载（按自己选定的形象）；对方的模型懒加载（绑定后才拉起，未绑定用户首屏减半）
+    meS.load(app.stage, MODELS[meAvatarRef.current] ?? MODELS.hiyori, MODEL_SCALE, tier).then(() => {
       meS.setPosition(window.innerWidth * 0.35, window.innerHeight * 0.78)
       bindDrag(meS, 'me')
         ; (window as any).__stageReady = true
@@ -175,7 +208,9 @@ export default function App() {
     const loadPartnerModel = () => {
       if (partnerLoading || partnerS.model) return
       partnerLoading = true
-      partnerS.load(app.stage, PARTNER_MODEL, MODEL_SCALE, tier).then(() => {
+      const pAvatar = stateRef.current.partner?.avatar ?? 'natori'
+      partnerAvatarRef.current = pAvatar
+      partnerS.load(app.stage, MODELS[pAvatar] ?? MODELS.natori, MODEL_SCALE, tier).then(() => {
         partnerS.setPosition(window.innerWidth * 0.65, window.innerHeight * 0.78)
         bindDrag(partnerS, 'partner')
         // 加载完成时按当前状态决定可见性与表情（getPartner 可能早已返回，竞态兜底）
@@ -183,6 +218,8 @@ export default function App() {
         const st = stateRef.current
         if (st.bond?.cold) partnerS.setMood('low')
         else partnerS.setMood(st.partnerMood ?? 'neutral')
+        // V1.3：恢复对方的穿搭风格
+        partnerS.applyStyle(st.partner?.style ?? 'default')
       })
     }
     partnerLoaderRef.current = loadPartnerModel
@@ -288,6 +325,13 @@ export default function App() {
         clearTimeout(pressTimer)
         pressTimer = null
       }
+    }
+    // 换装会重绑拖拽：先解绑上一套监听，避免重复累加
+    dragDisposers.current[who]?.()
+    dragDisposers.current[who] = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -408,6 +452,8 @@ export default function App() {
       interaction: handleIncoming,
       partner_online: (online: boolean) => setPartnerOnline(online),
       state_update: (s: any) => {
+        // V1.3 换装：对方换了形象/穿搭，实时跟随
+        if (s.avatar || s.style) swapPartnerLook(s)
         // 只在对方公开状态时展示；对方分身表情同步变化
         if (s.visibility === 'public') {
           setPartnerMood(s.mood)
@@ -427,13 +473,14 @@ export default function App() {
     api.getPartner(me.id).then(async (r) => {
       if (!r.partner) return
       setPartner(r.partner)
-      // 拉取对方持久化状态（TA 离线期间改的状态也能看到）
+      // 拉取对方持久化状态（TA 离线期间改的状态/换的穿搭也能看到）
       try {
         const st = await api.getState(r.partner.id)
         if (st.state && st.state.visibility === 'public') {
           setPartnerMood(st.state.mood)
           partnerSprite.current?.setMood(st.state.mood)
         }
+        if (st.style && st.style !== 'default') partnerSprite.current?.applyStyle(st.style)
       } catch (_e) { /* 忽略，避免阻塞 */ }
     })
     api.getState(me.id).then((r) => {
@@ -480,12 +527,71 @@ export default function App() {
     setShowMoodPicker(false)
   }
 
+  // ---------- V1.3 换装：切换形象（销毁旧模型 + 加载新模型，双端同步） ----------
+  const swapMyModel = async (key: string) => {
+    const app = appRef.current
+    const sprite = meSprite.current
+    if (!app || !sprite || !MODELS[key]) return
+    const home = { ...sprite.home }
+    meAvatarRef.current = key
+    await sprite.swap(app.stage, MODELS[key], MODEL_SCALE, governorRef.current?.current ?? 'high')
+    sprite.setPosition(home.x, home.y)
+    bindDrag(sprite, 'me')
+    sprite.setMood(stateRef.current.mood)
+  }
+
+  const applyAvatar = async (key: string) => {
+    if (!me || meAvatarRef.current === key) return
+    await swapMyModel(key)
+    const nu = { ...me, avatar: key }
+    setMe(nu)
+    localStorage.setItem('da_me', JSON.stringify(nu))
+    api.setLook(me.id, { avatar: key }).catch(() => {})
+    emit('state_update', { userId: me.id, avatar: key })
+    setToast(`已换上 ${AVATAR_LABELS[key] ?? key}`)
+  }
+
+  /** 切换穿搭风格（色彩滤镜），双端同步 */
+  const applyStyleLocal = async (styleId: string) => {
+    if (!me) return
+    setMyStyle(styleId)
+    meSprite.current?.applyStyle(styleId)
+    api.setLook(me.id, { style: styleId }).catch(() => {})
+    emit('state_update', { userId: me.id, style: styleId })
+    setToast(`穿搭：${OUTFIT_STYLES[styleId]?.label ?? styleId}`)
+  }
+
+  /** 对方换装（socket 通知到达时换 TA 的模型/滤镜） */
+  const swapPartnerLook = (look: { avatar?: string; style?: string }) => {
+    const app = appRef.current
+    const sprite = partnerSprite.current
+    if (!app || !sprite) return
+    if (look.style) sprite.applyStyle(look.style)
+    if (look.avatar && partnerAvatarRef.current !== look.avatar && MODELS[look.avatar]) {
+      const home = { ...sprite.home }
+      partnerAvatarRef.current = look.avatar
+      sprite
+        .swap(app.stage, MODELS[look.avatar], MODEL_SCALE, governorRef.current?.current ?? 'high')
+        .then(() => {
+          sprite.setPosition(home.x, home.y)
+          bindDrag(sprite, 'partner')
+          sprite.model!.visible = !!stateRef.current.partner
+          const st = stateRef.current
+          if (st.bond?.cold) sprite.setMood('low')
+          else sprite.setMood(st.partnerMood ?? 'neutral')
+        })
+    }
+  }
+
   // ---------- 创建身份 ----------
   const createIdentity = async () => {
     if (!nickname.trim()) return
     const { user } = await api.createUser(nickname.trim())
     localStorage.setItem('da_me', JSON.stringify(user))
     setMe(user)
+    // V1.3：新身份的随机形象与当前加载的不一致时立即换上
+    const key = user.avatar ?? 'hiyori'
+    if (key !== meAvatarRef.current) swapMyModel(key)
     const invite = (window as any).__pendingInvite
     if (invite) {
       const r = await api.acceptInvite(invite, user.id)
@@ -655,6 +761,35 @@ export default function App() {
                     : '还没有绑定 TA'}
                 </p>
               </div>
+              {/* V1.3 换装：形象 + 穿搭风格，双端实时同步 */}
+              <div className="panel-card">
+                <h4>形象</h4>
+                <div className="look-row">
+                  {Object.keys(MODELS).map((k) => (
+                    <button
+                      key={k}
+                      className={`btn ${((me.avatar ?? 'hiyori') === k) ? 'active' : ''}`}
+                      onClick={() => applyAvatar(k)}
+                    >
+                      {AVATAR_LABELS[k] ?? k}
+                    </button>
+                  ))}
+                </div>
+                <h4>穿搭</h4>
+                <div className="style-row">
+                  {Object.entries(OUTFIT_STYLES).map(([id, p]) => (
+                    <button
+                      key={id}
+                      className={`style-dot ${myStyle === id ? 'active' : ''}`}
+                      style={{ background: p.swatch }}
+                      title={p.label}
+                      aria-label={p.label}
+                      onClick={() => applyStyleLocal(id)}
+                    />
+                  ))}
+                </div>
+                <p className="sub tiny">换装会实时同步到 TA 的屏幕上</p>
+              </div>
               <div className="panel-card">
                 <button className="btn block" onClick={() => setShowMoodPicker(true)}>
                   设置状态 · 当前：{MOOD_LABELS[mood]} / {VIS_LABELS[visibility]}
@@ -668,7 +803,7 @@ export default function App() {
                   🎨 切换主题（当前：{theme === 'v1' ? 'v1 经典' : 'v2 极光'}）
                 </button>
               </div>
-              <p className="sub center tiny">数字分身 V1.2 · 小火人化</p>
+              <p className="sub center tiny">数字分身 V1.3 · 换装</p>
             </div>
           )}
 

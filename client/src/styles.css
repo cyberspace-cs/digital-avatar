@@ -395,6 +395,42 @@ body,
   gap: 8px;
 }
 
+/* ---------- V1.3 换装：形象切换 + 穿搭色板 ---------- */
+.look-row {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 14px;
+}
+
+.look-row .btn {
+  flex: 1;
+}
+
+.style-row {
+  display: flex;
+  gap: 12px;
+  margin: 10px 0 8px;
+}
+
+.style-dot {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid var(--glass-border);
+  cursor: pointer;
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+
+.style-dot:hover {
+  transform: scale(1.12);
+}
+
+.style-dot.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 12px var(--accent-soft);
+  transform: scale(1.12);
+}
+
 /* ---------- 记录面板 ---------- */
 .records-panel {
   position: fixed;

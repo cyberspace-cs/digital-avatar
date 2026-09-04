@@ -56,8 +56,11 @@ CREATE TABLE IF NOT EXISTS growth_events (
 CREATE INDEX IF NOT EXISTS idx_growth_events_bond_day ON growth_events(bond_id, day);
 `)
 
+// ---------- V1.3 换装迁移（幂等）：users 加 style 列（穿搭风格） ----------
+try { db.exec('ALTER TABLE users ADD COLUMN style TEXT DEFAULT \'default\';') } catch (_e) { /* 列已存在 */ }
+
 export const q = {
-  insertUser: db.prepare('INSERT INTO users (id, name) VALUES (?, ?)'),
+  insertUser: db.prepare('INSERT INTO users (id, name, avatar) VALUES (?, ?, ?)'),
   getUser: db.prepare('SELECT * FROM users WHERE id = ?'),
   insertBond: db.prepare('INSERT INTO bonds (id, user_a, user_b) VALUES (?, ?, ?)'),
   getBond: db.prepare(
@@ -79,6 +82,9 @@ export const q = {
   updateBondGrowth: db.prepare(
     'UPDATE bonds SET growth = ?, streak = ?, last_active_day = ? WHERE id = ?',
   ),
+  // ---------- V1.3 换装 ----------
+  updateUserAvatar: db.prepare('UPDATE users SET avatar = ? WHERE id = ?'),
+  updateUserStyle: db.prepare('UPDATE users SET style = ? WHERE id = ?'),
   insertGrowthEvent: db.prepare(
     'INSERT INTO growth_events (id, bond_id, delta, reason, day) VALUES (?, ?, ?, ?, ?)',
   ),

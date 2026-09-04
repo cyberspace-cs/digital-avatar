@@ -22,13 +22,20 @@ export const api = {
       body: JSON.stringify({ userId }),
     }),
   getPartner: (userId: string) => req<{ partner: any | null }>(`/api/partner/${userId}`),
-  getState: (userId: string) => req<{ state: any | null }>(`/api/state/${userId}`),
+  getState: (userId: string) =>
+    req<{ state: any | null; avatar?: string; style?: string }>(`/api/state/${userId}`),
   setState: (userId: string, mood: string, visibility: string) =>
     req<{ state: any }>('/api/state', {
       method: 'POST',
       body: JSON.stringify({ userId, mood, visibility }),
     }),
   getEvents: (userId: string) => req<{ events: any[] }>(`/api/events/${userId}`),
+  // ---------- V1.3 换装：形象 / 穿搭风格 ----------
+  setLook: (userId: string, look: { avatar?: string; style?: string }) =>
+    req<{ state: any; avatar?: string; style?: string }>('/api/state', {
+      method: 'POST',
+      body: JSON.stringify({ userId, ...look }),
+    }),
   // ---------- V1.2 火花成长 ----------
   getBond: (userId: string) => req<{ bond: any | null }>(`/api/bond/${userId}`),
   getQuests: (userId: string) =>

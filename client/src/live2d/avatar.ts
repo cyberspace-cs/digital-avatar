@@ -1,4 +1,5 @@
 import * as PIXI from 'pixi.js'
+import { ColorMatrixFilter } from '@pixi/filter-color-matrix'
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4'
 import type { Mood } from '../types'
 import { type QualityTier } from './perf'
@@ -146,11 +147,29 @@ const MOOD_PARAMS: Record<Mood, Array<{ id: string; v: number; mode: 'abs' | 'mu
 /** 参数平滑过渡时间常数（ms）：切心情时约 0.3s 内自然过渡，不跳变 */
 const MOOD_PARAM_TAU = 120
 
+/**
+ * 穿搭风格（V1.3）：ColorMatrixFilter 色彩预设，零新增美术资产。
+ * hue 单位为角度；sat/bri 为倍率。mono 为黑白。
+ * `swatch` 仅供 UI 色块展示。
+ */
+export const OUTFIT_STYLES: Record<
+  string,
+  { label: string; swatch: string; hue?: number; sat?: number; bri?: number; mono?: boolean }
+> = {
+  default: { label: '原生', swatch: '#c9c9d6' },
+  sakura: { label: '樱花粉', swatch: '#ffb7c9', hue: -18, sat: 1.25, bri: 1.06 },
+  ocean: { label: '海盐蓝', swatch: '#8fd0ff', hue: 28, sat: 1.1, bri: 1.02 },
+  sunset: { label: '元气橙', swatch: '#ffb26b', hue: -45, sat: 1.3, bri: 1.04 },
+  night: { label: '暗夜紫', swatch: '#a78bfa', hue: 14, sat: 0.85, bri: 0.78 },
+  mono: { label: '胶片黑白', swatch: '#efefef', mono: true },
+}
+
 export class AvatarSprite {
   model: Live2DModel | null = null
   home = { x: 0, y: 0 }
   target = { x: 0, y: 0 }
   mood: Mood = 'neutral'
+  style = 'default'
   lerpSpeed = 0.06
   private _returning = false
   private _worker: Worker | null = null
@@ -230,7 +249,47 @@ export class AvatarSprite {
     this.model.interactive = true
     container.addChild(this.model)
     this._setupMoodParamDriver()
+    this.applyStyle(this.style)
     return this.model
+  }
+
+  /**
+   * 换装（V1.3）：销毁当前模型并加载新 model3。
+   * 位置/可见性/心情由 App 层在 swap 完成后恢复。
+   */
+  async swap(container: PIXI.Container, url: string, scale: number, tier: QualityTier = 'high') {
+    if (this.model) {
+      const internal = (this.model as any)?.internalModel as any
+      internal?.off?.('beforeModelUpdate', this._applyMoodParams)
+      this.model.destroy()
+      this.model = null
+    }
+    this._moodCur.clear()
+    this._moodDefs.clear()
+    this._worker?.terminate()
+    this._worker = null
+    this._blobUrls = []
+    await this.load(container, url, scale, tier)
+  }
+
+  /** 应用穿搭风格滤镜；default/未知值清除滤镜。模型未加载时仅记录，load/swap 后自动生效 */
+  applyStyle(styleId: string) {
+    this.style = OUTFIT_STYLES[styleId] ? styleId : 'default'
+    if (!this.model) return
+    const preset = OUTFIT_STYLES[this.style]
+    if (!preset.hue && !preset.sat && !preset.bri && !preset.mono) {
+      this.model.filters = null as any
+      return
+    }
+    const f = new ColorMatrixFilter()
+    if (preset.mono) {
+      f.saturate(0, false)
+    } else {
+      if (preset.hue) f.hue(preset.hue, false)
+      if (preset.sat) f.saturate(preset.sat, true)
+      if (preset.bri) f.brightness(preset.bri, true)
+    }
+    this.model.filters = [f]
   }
 
   /** 把 MOOD_PARAMS 解析成参数下标（跳过模型不存在的参数），挂 beforeModelUpdate 驱动 */

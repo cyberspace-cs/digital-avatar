@@ -15,7 +15,9 @@ app.post('/api/identity', (req, res) => {
   const { name } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'name required' })
   const id = uuid()
-  q.insertUser.run(id, name.trim())
+  // V1.3：创建时随机分配一个形象（Hiyori / Natori），后续可在「我的」里切换
+  const avatar = Math.random() < 0.5 ? 'hiyori' : 'natori'
+  q.insertUser.run(id, name.trim(), avatar)
   res.json({ user: q.getUser.get(id) })
 })
 
@@ -59,13 +61,22 @@ app.get('/api/partner/:userId', (req, res) => {
 })
 
 app.post('/api/state', (req, res) => {
-  const { userId, mood, visibility } = req.body
+  const { userId, mood, visibility, avatar, style } = req.body
   q.setState.run(userId, mood ?? 'neutral', visibility ?? 'public')
-  res.json({ state: q.getState.get(userId) })
+  // V1.3 换装：形象（模型）与穿搭风格（滤镜）持久化在 users 行上
+  if (avatar) q.updateUserAvatar.run(avatar, userId)
+  if (style) q.updateUserStyle.run(style, userId)
+  const user = q.getUser.get(userId)
+  res.json({ state: q.getState.get(userId), avatar: user?.avatar, style: user?.style ?? 'default' })
 })
 
 app.get('/api/state/:userId', (req, res) => {
-  res.json({ state: q.getState.get(req.params.userId) ?? null })
+  const user = q.getUser.get(req.params.userId)
+  res.json({
+    state: q.getState.get(req.params.userId) ?? null,
+    avatar: user?.avatar ?? 'hiyori',
+    style: user?.style ?? 'default',
+  })
 })
 
 app.get('/api/events/:userId', (req, res) => {

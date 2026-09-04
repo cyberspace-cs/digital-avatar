@@ -5,6 +5,8 @@ export interface User {
   id: string
   name: string
   avatar: string
+  /** V1.3 换装：穿搭风格（ColorMatrix 预设 id） */
+  style?: string
   personality: string
 }
 
