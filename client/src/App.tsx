@@ -113,6 +113,8 @@ export default function App() {
   const [quests, setQuests] = useState<QuestItem[]>([])
   // V1.3 换装：自己的穿搭风格（形象跟 me.avatar 走）
   const [myStyle, setMyStyle] = useState('default')
+  // 首个模型加载中：给用户"分身登场中"反馈，而不是对着空白等
+  const [booting, setBooting] = useState(true)
 
   // 对方 Live2D 模型懒加载器：未绑定用户不加载对方模型（省一半首屏带宽），绑定后才拉起
   const partnerLoaderRef = useRef<(() => void) | null>(null)
@@ -202,7 +204,8 @@ export default function App() {
       meS.setPosition(window.innerWidth * 0.35, window.innerHeight * 0.78)
       bindDrag(meS, 'me')
         ; (window as any).__stageReady = true
-    })
+      setBooting(false)
+    }).catch(() => setBooting(false))
 
     let partnerLoading = false
     const loadPartnerModel = () => {
@@ -304,6 +307,7 @@ export default function App() {
     const onUp = () => {
       if (!dragging) return
       dragging = false
+      model.cursor = 'default'
       if (pressTimer != null) {
         clearTimeout(pressTimer)
         pressTimer = null
@@ -321,6 +325,7 @@ export default function App() {
     }
     const onCancel = () => {
       dragging = false
+      model.cursor = 'default'
       if (pressTimer != null) {
         clearTimeout(pressTimer)
         pressTimer = null
@@ -542,6 +547,8 @@ export default function App() {
 
   const applyAvatar = async (key: string) => {
     if (!me || meAvatarRef.current === key) return
+    // 加载提示先行（换模型需拉取资源，给用户即时反馈而不是"点了没反应"）
+    setToast('换装中…')
     await swapMyModel(key)
     const nu = { ...me, avatar: key }
     setMe(nu)
@@ -551,7 +558,7 @@ export default function App() {
     setToast(`已换上 ${AVATAR_LABELS[key] ?? key}`)
   }
 
-  /** 切换穿搭风格（色彩滤镜），双端同步 */
+  /** 切换穿搭风格（配饰+光环，肤色不变），双端同步 */
   const applyStyleLocal = async (styleId: string) => {
     if (!me) return
     setMyStyle(styleId)
@@ -561,7 +568,7 @@ export default function App() {
     setToast(`穿搭：${OUTFIT_STYLES[styleId]?.label ?? styleId}`)
   }
 
-  /** 对方换装（socket 通知到达时换 TA 的模型/滤镜） */
+  /** 对方换装（socket 通知到达时换 TA 的模型/穿搭） */
   const swapPartnerLook = (look: { avatar?: string; style?: string }) => {
     const app = appRef.current
     const sprite = partnerSprite.current
@@ -641,6 +648,8 @@ export default function App() {
         </div>
       ) : (
         <>
+          {/* 首个模型加载中提示（渲染感知性能：让等待"可见"） */}
+          {booting && <div className="loading-pill">✨ 分身登场中…</div>}
           {/* 等级光晕：火花等级越高越亮，断联时熄灭 */}
           {bond && !bond.cold && (
             <div
@@ -776,19 +785,23 @@ export default function App() {
                   ))}
                 </div>
                 <h4>穿搭</h4>
-                <div className="style-row">
+                <div className="wardrobe-row">
                   {Object.entries(OUTFIT_STYLES).map(([id, p]) => (
                     <button
                       key={id}
-                      className={`style-dot ${myStyle === id ? 'active' : ''}`}
-                      style={{ background: p.swatch }}
-                      title={p.label}
-                      aria-label={p.label}
+                      className={`style-chip ${myStyle === id ? 'active' : ''}`}
+                      style={myStyle === id && p.swatch !== '#c9c9d6'
+                        ? { borderColor: p.swatch, boxShadow: `0 0 0 3px ${p.swatch}33, 0 0 14px ${p.swatch}44` }
+                        : undefined}
+                      aria-pressed={myStyle === id}
                       onClick={() => applyStyleLocal(id)}
-                    />
+                    >
+                      <span className="style-emoji">{p.emoji || '🌱'}</span>
+                      <span className="style-label">{p.label}</span>
+                    </button>
                   ))}
                 </div>
-                <p className="sub tiny">换装会实时同步到 TA 的屏幕上</p>
+                <p className="sub tiny">配饰 + 气场穿搭，肤色永远不变；会实时同步到 TA 的屏幕上</p>
               </div>
               <div className="panel-card">
                 <button className="btn block" onClick={() => setShowMoodPicker(true)}>
@@ -803,7 +816,7 @@ export default function App() {
                   🎨 切换主题（当前：{theme === 'v1' ? 'v1 经典' : 'v2 极光'}）
                 </button>
               </div>
-              <p className="sub center tiny">数字分身 V1.3 · 换装</p>
+              <p className="sub center tiny">数字分身 V1.3.1 · 换装（肤色安全）</p>
             </div>
           )}
 

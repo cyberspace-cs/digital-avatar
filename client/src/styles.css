@@ -395,7 +395,7 @@ body,
   gap: 8px;
 }
 
-/* ---------- V1.3 换装：形象切换 + 穿搭色板 ---------- */
+/* ---------- V1.3.1 穿搭衣橱：配饰芯片（肤色安全方案） ---------- */
 .look-row {
   display: flex;
   gap: 8px;
@@ -406,29 +406,86 @@ body,
   flex: 1;
 }
 
-.style-row {
-  display: flex;
-  gap: 12px;
+/* 衣橱芯片：emoji + 名称，≥44px 触控目标，active 态用光环色描边 */
+.wardrobe-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
   margin: 10px 0 8px;
 }
 
-.style-dot {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
+.style-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-height: 56px;
+  padding: 8px 4px;
   border: 2px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass);
+  color: var(--text);
   cursor: pointer;
-  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease), border-color 0.2s var(--ease);
 }
 
-.style-dot:hover {
-  transform: scale(1.12);
+.style-chip:hover {
+  transform: translateY(-2px) scale(1.03);
 }
 
-.style-dot.active {
+.style-chip:active {
+  transform: scale(0.95);
+}
+
+.style-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.style-chip.active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 12px var(--accent-soft);
-  transform: scale(1.12);
+  background: var(--accent-soft);
+}
+
+.style-emoji {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.style-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.style-chip.active .style-label {
+  color: var(--text);
+}
+
+/* 首个模型加载中提示（感知性能） */
+.loading-pill {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--blur));
+  color: var(--text);
+  font-size: 13px;
+  animation: pop 0.3s var(--ease);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-pill,
+  .style-chip {
+    animation: none;
+    transition: none;
+  }
 }
 
 /* ---------- 记录面板 ---------- */
@@ -809,7 +866,7 @@ body,
   z-index: 30;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 66px 16px 90px;
+  padding: 66px 16px 110px;
   background:
     linear-gradient(rgba(0, 0, 0, 0.25), rgba(0, 0, 0, 0.55)),
     radial-gradient(ellipse at 50% 0%, var(--bg2), var(--bg1) 75%);

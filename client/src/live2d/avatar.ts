@@ -1,5 +1,4 @@
 import * as PIXI from 'pixi.js'
-import { ColorMatrixFilter } from '@pixi/filter-color-matrix'
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4'
 import type { Mood } from '../types'
 import { type QualityTier } from './perf'
@@ -148,20 +147,44 @@ const MOOD_PARAMS: Record<Mood, Array<{ id: string; v: number; mode: 'abs' | 'mu
 const MOOD_PARAM_TAU = 120
 
 /**
- * 穿搭风格（V1.3）：ColorMatrixFilter 色彩预设，零新增美术资产。
- * hue 单位为角度；sat/bri 为倍率。mono 为黑白。
- * `swatch` 仅供 UI 色块展示。
+ * 穿搭风格（V1.3.1 肤色安全版）。
+ *
+ * V1.3.0 曾用 ColorMatrixFilter 全模型滤镜——肤色/脸也会跟着变色，被用户否决。
+ * 新方案：**配饰（emoji 跟随头顶/侧边/脖子）+ 身后光环（径向渐变 tint）**，
+ * 模型本身的任何像素都不改，肤色永远不会变。
+ *
+ * - `emoji`：配饰符号，空串表示无配饰
+ * - `aura`：光环颜色（0xRRGGBB），0 表示无光环
+ * - `anchor`：配饰挂点 head=头顶 / side=头侧 / neck=脖子
+ * - `swatch`：UI 色板展示色（与光环同色系）
  */
 export const OUTFIT_STYLES: Record<
   string,
-  { label: string; swatch: string; hue?: number; sat?: number; bri?: number; mono?: boolean }
+  { label: string; emoji: string; aura: number; anchor: 'head' | 'side' | 'neck'; swatch: string }
 > = {
-  default: { label: '原生', swatch: '#c9c9d6' },
-  sakura: { label: '樱花粉', swatch: '#ffb7c9', hue: -18, sat: 1.25, bri: 1.06 },
-  ocean: { label: '海盐蓝', swatch: '#8fd0ff', hue: 28, sat: 1.1, bri: 1.02 },
-  sunset: { label: '元气橙', swatch: '#ffb26b', hue: -45, sat: 1.3, bri: 1.04 },
-  night: { label: '暗夜紫', swatch: '#a78bfa', hue: 14, sat: 0.85, bri: 0.78 },
-  mono: { label: '胶片黑白', swatch: '#efefef', mono: true },
+  default: { label: '原生', emoji: '', aura: 0, anchor: 'head', swatch: '#c9c9d6' },
+  sakura: { label: '蝴蝶结', emoji: '🎀', aura: 0xff9ec4, anchor: 'side', swatch: '#ff9ec4' },
+  ocean: { label: '小蓝帽', emoji: '🧢', aura: 0x6cc3ff, anchor: 'head', swatch: '#6cc3ff' },
+  sunset: { label: '向日葵', emoji: '🌻', aura: 0xffb26b, anchor: 'side', swatch: '#ffb26b' },
+  night: { label: '小皇冠', emoji: '👑', aura: 0xa78bfa, anchor: 'head', swatch: '#a78bfa' },
+  mono: { label: '小围巾', emoji: '🧣', aura: 0xd8dee9, anchor: 'neck', swatch: '#d8dee9' },
+}
+
+/** 径向渐变光环纹理（模块级共享，白色渐变 + tint 上色，只生成一次） */
+let auraTexture: PIXI.Texture | null = null
+function getAuraTexture(): PIXI.Texture {
+  if (auraTexture) return auraTexture
+  const c = document.createElement('canvas')
+  c.width = c.height = 256
+  const ctx = c.getContext('2d')!
+  const g = ctx.createRadialGradient(128, 128, 8, 128, 128, 128)
+  g.addColorStop(0, 'rgba(255,255,255,0.5)')
+  g.addColorStop(0.45, 'rgba(255,255,255,0.18)')
+  g.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, 256, 256)
+  auraTexture = PIXI.Texture.from(c)
+  return auraTexture
 }
 
 export class AvatarSprite {
@@ -179,6 +202,10 @@ export class AvatarSprite {
   /** 按模型解析好的心情参数（跳过模型不存在的参数） */
   private _moodDefs = new Map<Mood, Array<{ idx: number; v: number; mode: 'abs' | 'mul' }>>()
   private _moodLastTs = 0
+  /** 穿搭覆盖层：光环（模型身后）+ 配饰（模型身前），V1.3.1 肤色安全 */
+  private _container: PIXI.Container | null = null
+  private _aura: PIXI.Sprite | null = null
+  private _acc: PIXI.Text | null = null
 
   async load(container: PIXI.Container, url: string, scale: number, tier: QualityTier = 'high') {
     await installResolveUrlMiddleware()
@@ -248,6 +275,7 @@ export class AvatarSprite {
     this.model.anchor.set(0.5, 0.5)
     this.model.interactive = true
     container.addChild(this.model)
+    this._container = container
     this._setupMoodParamDriver()
     this.applyStyle(this.style)
     return this.model
@@ -256,6 +284,7 @@ export class AvatarSprite {
   /**
    * 换装（V1.3）：销毁当前模型并加载新 model3。
    * 位置/可见性/心情由 App 层在 swap 完成后恢复。
+   * 覆盖层（光环/配饰）随旧模型一并清理，加载完按当前 style 重建。
    */
   async swap(container: PIXI.Container, url: string, scale: number, tier: QualityTier = 'high') {
     if (this.model) {
@@ -264,6 +293,7 @@ export class AvatarSprite {
       this.model.destroy()
       this.model = null
     }
+    this._clearOverlay()
     this._moodCur.clear()
     this._moodDefs.clear()
     this._worker?.terminate()
@@ -272,24 +302,106 @@ export class AvatarSprite {
     await this.load(container, url, scale, tier)
   }
 
-  /** 应用穿搭风格滤镜；default/未知值清除滤镜。模型未加载时仅记录，load/swap 后自动生效 */
+  /**
+   * 应用穿搭风格（V1.3.1 肤色安全）：配饰 emoji + 身后光环 tint。
+   * 不再对模型加任何 filter——模型像素零改动，肤色不变。
+   * 模型未加载时仅记录 style，load/swap 完成后自动生效。
+   */
   applyStyle(styleId: string) {
     this.style = OUTFIT_STYLES[styleId] ? styleId : 'default'
-    if (!this.model) return
     const preset = OUTFIT_STYLES[this.style]
-    if (!preset.hue && !preset.sat && !preset.bri && !preset.mono) {
-      this.model.filters = null as any
-      return
-    }
-    const f = new ColorMatrixFilter()
-    if (preset.mono) {
-      f.saturate(0, false)
+    if (!this.model || !this._container) return
+
+    // 光环：径向渐变 sprite，置于模型身后（stage 最底层）
+    if (preset.aura) {
+      if (!this._aura) {
+        this._aura = new PIXI.Sprite(getAuraTexture())
+        this._aura.anchor.set(0.5)
+        this._container.addChildAt(this._aura, 0)
+      }
+      this._aura.tint = preset.aura
+      this._aura.visible = this.model.visible
     } else {
-      if (preset.hue) f.hue(preset.hue, false)
-      if (preset.sat) f.saturate(preset.sat, true)
-      if (preset.bri) f.brightness(preset.bri, true)
+      this._clearAura()
     }
-    this.model.filters = [f]
+
+    // 配饰：emoji Text，置于模型身前（跟随头顶/侧边/脖子）
+    if (preset.emoji) {
+      if (!this._acc || this._acc.text !== preset.emoji) {
+        this._clearAcc()
+        const t = new PIXI.Text(preset.emoji, { fontSize: 48 })
+        t.resolution = 2
+        t.anchor.set(0.5, 0.72)
+        this._acc = t
+        this._container.addChild(t)
+      }
+      // 尺寸按模型实际渲染高度定，clamp 防止异常小/大
+      const h = this.model.height
+      const fs = Math.max(22, Math.min(72, h * 0.2))
+      if (this._acc.style.fontSize !== fs) this._acc.style.fontSize = fs
+      this._acc.visible = true
+    } else {
+      this._clearAcc()
+    }
+    this._syncOverlay()
+  }
+
+  /** 每帧同步覆盖层：光环贴模型中心 + 呼吸脉冲；配饰按挂点跟随 + 轻微摇摆 */
+  private _syncOverlay() {
+    if (!this.model) return
+    const t = performance.now()
+    if (this._aura) {
+      this._aura.visible = this.model.visible
+      if (this._aura.visible) {
+        this._aura.x = this.model.x
+        this._aura.y = this.model.y
+        const d = Math.max(this.model.width, this.model.height) * 1.55
+        this._aura.scale.set(d / 256)
+        // 轻微呼吸脉冲（±0.06），性能档位低时静止
+        this._aura.alpha = 0.5 + Math.sin(t / 900) * 0.06
+      }
+    }
+    if (this._acc) {
+      this._acc.visible = this.model.visible
+      if (this._acc.visible) {
+        const preset = OUTFIT_STYLES[this.style]
+        const w = this.model.width
+        const h = this.model.height
+        if (preset.anchor === 'head') {
+          this._acc.x = this.model.x
+          this._acc.y = this.model.y - h * 0.4
+        } else if (preset.anchor === 'side') {
+          this._acc.x = this.model.x + w * 0.24
+          this._acc.y = this.model.y - h * 0.38
+        } else {
+          this._acc.x = this.model.x
+          this._acc.y = this.model.y - h * 0.18
+        }
+        // 轻微摇摆跟随模型倾斜，营造"戴在身上"的感觉
+        this._acc.rotation = this.model.rotation + Math.sin(t / 700) * 0.04
+      }
+    }
+  }
+
+  private _clearAura() {
+    if (this._aura) {
+      this._aura.parent?.removeChild(this._aura)
+      this._aura.destroy()
+      this._aura = null
+    }
+  }
+
+  private _clearAcc() {
+    if (this._acc) {
+      this._acc.parent?.removeChild(this._acc)
+      this._acc.destroy()
+      this._acc = null
+    }
+  }
+
+  private _clearOverlay() {
+    this._clearAura()
+    this._clearAcc()
   }
 
   /** 把 MOOD_PARAMS 解析成参数下标（跳过模型不存在的参数），挂 beforeModelUpdate 驱动 */
@@ -421,6 +533,7 @@ export class AvatarSprite {
       this.model.x += (this.target.x - this.model.x) * this.lerpSpeed * d
       this.model.y += (this.target.y - this.model.y) * this.lerpSpeed * d
     }
+    this._syncOverlay()
   }
 
   /** App.tsx 兼容：PixiJS app.ticker.add() 不传参也能工作；setPosition = setAnchor 但不设 target */
@@ -446,6 +559,8 @@ export class AvatarSprite {
     this._blobUrls = []
     this._worker?.terminate()
     this._worker = null
+    this._clearOverlay()
+    this._container = null
     if (this.model) {
       const p = this.model.parent
       p?.removeChild(this.model)
