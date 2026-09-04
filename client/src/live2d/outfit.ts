@@ -264,26 +264,34 @@ export async function recolorOutfitTextures(
     try {
       let outUrl = recolorCache.get(cacheKey) ?? null
       if (!outUrl) {
-        const src = await fetch(url).then((r) => r.blob())
-        const bmp = await createImageBitmap(src)
-        const cvs = typeof OffscreenCanvas !== 'undefined'
-          ? new OffscreenCanvas(bmp.width, bmp.height)
-          : Object.assign(document.createElement('canvas'), { width: bmp.width, height: bmp.height })
+        // 兼容性关键：不要用 createImageBitmap/OffscreenCanvas.convertToBlob——
+        // iOS < 16.4 / 部分 Android Webview 上不存在，抛异常被 catch 后静默保持原生，
+        // 表现为"所有颜色点了没反应"。Image + DOM canvas + toBlob 全平台可用。
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const el = new Image()
+          el.onload = () => resolve(el)
+          el.onerror = () => reject(new Error('texture decode failed'))
+          el.src = url
+        })
+        const cvs = document.createElement('canvas')
+        cvs.width = img.naturalWidth
+        cvs.height = img.naturalHeight
         const ctx = cvs.getContext('2d', { willReadFrequently: true })!
-        ctx.drawImage(bmp, 0, 0)
-        bmp.close?.()
-        const img = ctx.getImageData(0, 0, cvs.width, cvs.height)
+        ctx.drawImage(img, 0, 0)
+        const data = ctx.getImageData(0, 0, cvs.width, cvs.height)
         // 保护矩形/白名单矩形/肤色阈值换算到当前纹理尺寸（SD 半图按宽度比例缩放）
         const rects = protectSrc?.[norm]
-        const k = img.width / 2048
+        const k = data.width / 2048
         const scaled = rects?.map(({ rect, hairOnly }) => ({
           rect: rect.map((n) => n * k) as [number, number, number, number],
           hairOnly,
         }))
         const allow = allowSrc?.[norm]?.map((r) => r.map((n) => n * k) as [number, number, number, number])
-        recolorPixels(img.data, img.width, style, scaled, avatarId, allow)
-        ctx.putImageData(img, 0, 0)
-        const out: Blob = await (cvs as OffscreenCanvas).convertToBlob({ type: 'image/png' })
+        recolorPixels(data.data, data.width, style, scaled, avatarId, allow)
+        ctx.putImageData(data, 0, 0)
+        const out: Blob = await new Promise<Blob>((resolve, reject) => {
+          cvs.toBlob((b) => (b ? resolve(b) : reject(new Error('canvas.toBlob null'))), 'image/png')
+        })
         outUrl = URL.createObjectURL(out)
         recolorCache.set(cacheKey, outUrl)
         ownedUrls.push(outUrl)

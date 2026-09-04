@@ -179,6 +179,15 @@ export class AvatarSprite {
   /** 最近一次 load 参数：applyStyle 切风格时按原参数重载模型（重染纹理） */
   private _lastLoad: { container: PIXI.Container; url: string; scale: number; tier: QualityTier } | null = null
   private _bframe = 0
+  /** 加载会话号：每次 load 自增；完成的 load 若号已过期说明被更新的加载取代 → 销毁产物不入舞台（防孤儿模型叠层/旧色覆盖新色） */
+  private _loadSeq = 0
+  /** 加载串行队列：swap/applyStyle/applyVariant 同一时刻只允许一个重载在跑，快速连点自动合并到最新意图 */
+  private _loadChain: Promise<unknown> = Promise.resolve()
+  /** 舞台上已生效的 style/variant（this.style/variant 是"意图"，可能领先于舞台；用于连点合并判重） */
+  private _appliedStyle = 'default'
+  private _appliedVariant = 'base'
+  /** 本次加载实际重染使用的 style/variant（worker 直连兜底路径无重染时为 null → 回落字段值） */
+  private _pendingApplied: { style: string; variant: string } | null = null
   /** drawable 顶点范围（模型单位坐标）。Cubism 画布含大量空白，getBounds 是画布矩形而非角色，配饰定位必须用顶点 */
   private _verts = { minX: 0, maxX: 0, minY: 0, maxY: 0 }
 
@@ -303,18 +312,23 @@ export class AvatarSprite {
       // V1.4.0 真实换装：非 default 风格 → 对服装纹理做选择性重染（肤色像素零改动），
       // 原位替换 blobMap 中的纹理条目，模型加载管线零侵入
       try {
+        // 捕获本次加载实际使用的 style/variant 快照（字段可能被连点随时改掉，
+        // _applied 必须记录"舞台上真的是什么"，否则连点合并判重会谎报）
+        const styleAtLoad = this.style
+        const variantAtLoad = this.variant
         // V1.5.0 衣橱 2.0：款式先行（整纹理替换），随后重染在其上换色（款式×颜色双轴）
-        const va = await applyOutfitVariant(result.blobMap ?? {}, avatarIdFromUrl(url), this.variant)
+        const va = await applyOutfitVariant(result.blobMap ?? {}, avatarIdFromUrl(url), variantAtLoad)
         this._blobUrls.push(...va.ownedUrls)
-        if (va.replaced) console.info(`[outfit] variant=${this.variant} 替换 ${va.replaced} 张纹理`)
+        if (va.replaced) console.info(`[outfit] variant=${variantAtLoad} 替换 ${va.replaced} 张纹理`)
         const { replaced, ownedUrls } = await recolorOutfitTextures(
           result.blobMap ?? {},
           avatarIdFromUrl(url),
-          this.style,
-          this.variant,
+          styleAtLoad,
+          variantAtLoad,
         )
         this._blobUrls.push(...ownedUrls)
-        if (replaced) console.info(`[outfit] style=${this.style} 重染 ${replaced} 张纹理`)
+        if (replaced) console.info(`[outfit] style=${styleAtLoad} 重染 ${replaced} 张纹理`)
+        this._pendingApplied = { style: styleAtLoad, variant: variantAtLoad }
       } catch (e) {
         console.warn('[outfit] 重染流程失败，保持原生', e)
       }
@@ -349,80 +363,125 @@ export class AvatarSprite {
     }
 
     console.info(`[load] Live2DModel.from start: ${avatarIdFromUrl(url)}`)
+    const seq = ++this._loadSeq
+    let model: Live2DModel
     try {
-      this.model = (await Live2DModel.from(finalSource as any)) as Live2DModel
+      model = (await Live2DModel.from(finalSource as any)) as Live2DModel
     } catch (e) {
       console.error('[load] Live2DModel.from failed:', avatarIdFromUrl(url), e)
       throw e
     }
+    // 过期加载：期间发生了更新的 swap/applyStyle（快速连点竞态）→ 本次产物销毁，绝不入舞台
+    if (seq !== this._loadSeq) {
+      console.info(`[load] 丢弃过期加载: ${avatarIdFromUrl(url)} (seq ${seq} < ${this._loadSeq})`)
+      worker?.terminate()
+      model.destroy()
+      return null
+    }
     console.info(`[load] Live2DModel.from done: ${avatarIdFromUrl(url)}`)
+    this.model = model
     this.model.scale.set(scale)
     this.model.anchor.set(0.5, 0.5)
     this.model.interactive = true
     container.addChild(this.model)
     this._container = container
     this._lastLoad = { container, url, scale, tier }
+    const applied = this._pendingApplied ?? { style: this.style, variant: this.variant }
+    this._pendingApplied = null
+    this._appliedStyle = applied.style
+    this._appliedVariant = applied.variant
     this._setupMoodParamDriver()
     this._updateVertexBounds()
     this._updateHitArea()
     return this.model
   }
 
+  /** 加载串行队列：fn 排队执行（前一个完成/失败后才跑下一个），链本身永不 reject */
+  private _enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this._loadChain.then(fn, fn)
+    this._loadChain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
   /**
    * 换装（V1.3）：销毁当前模型并加载新 model3。
    * 位置/可见性/心情由 App 层在 swap 完成后恢复。
+   * V1.5.1：入队串行执行——快速连点/换装+换形象并发时不再产生并发加载竞态
+   * （多个模型同时 addChild 叠层、旧色模型后完成覆盖新色），且过期加载产物直接销毁。
    */
-  async swap(container: PIXI.Container, url: string, scale: number, tier: QualityTier = 'high') {
-    if (this.model) {
-      const internal = (this.model as any)?.internalModel as any
-      internal?.off?.('beforeModelUpdate', this._applyMoodParams)
-      this.model.destroy()
-      this.model = null
+  swap(container: PIXI.Container, url: string, scale: number, tier: QualityTier = 'high') {
+    return this._enqueue(() => this._swapNow(container, url, scale, tier))
+  }
+
+  /** swap 的未加锁实现：仅限已入队的内部调用（applyStyle/applyVariant）使用，避免嵌套死锁 */
+  private async _swapNow(container: PIXI.Container, url: string, scale: number, tier: QualityTier) {
+    // 收敛循环：加载期间用户又连点了（意图变更）→ 用最新意图再补一轮重载，
+    // 直到舞台与意图一致。_applied 记录的是加载实际使用的快照，判重绝不谎报。
+    for (let guard = 0; guard < 5; guard++) {
+      if (this.model) {
+        const internal = (this.model as any)?.internalModel as any
+        internal?.off?.('beforeModelUpdate', this._applyMoodParams)
+        this.model.destroy()
+        this.model = null
+      }
+      this._moodCur.clear()
+      this._moodDefs.clear()
+      this._worker?.terminate()
+      this._worker = null
+      this._blobUrls = []
+      await this.load(container, url, scale, tier)
+      if (this.style === this._appliedStyle && this.variant === this._appliedVariant) return
+      console.info('[swap] 意图在加载期间变更，收敛重载')
     }
-    this._moodCur.clear()
-    this._moodDefs.clear()
-    this._worker?.terminate()
-    this._worker = null
-    this._blobUrls = []
-    await this.load(container, url, scale, tier)
   }
 
   /**
    * 应用穿搭风格（V1.4.0 真实换装）：重染服装纹理需要重建模型纹理，
    * 按最近一次 load 参数整体重载（SW 缓存 + 重染结果缓存，二次切换秒开）。
    * 模型未加载时仅记录 style，load 时自动生效。
+   * V1.5.1：入队串行 + 以 _appliedStyle 判重——连点时中间态自动合并（load 总是读最新
+   * this.style 重染），只有最后一击真正重载，绝不出现"旧色后完成盖掉新色"。
    * @returns 是否发生了重载（App 层据此恢复位置/心情）
    */
-  async applyStyle(styleId: string): Promise<boolean> {
+  applyStyle(styleId: string): Promise<boolean> {
     const next = OUTFIT_STYLES[styleId] ? styleId : 'default'
-    const prev = this.style
     this.style = next
-    if (next === prev || !this.model || !this._container || !this._lastLoad) return false
-    const { container, url, scale, tier } = this._lastLoad
-    // 记住当前姿态：重载后原位恢复，不做"回家"跳动；可见性一并保持（partner 可能处于隐藏态）
-    const px = this.model.x, py = this.model.y, pv = this.model.visible
-    await this.swap(container, url, scale, tier)
-    if (this.model) { this.model.x = px; this.model.y = py; this.model.visible = pv }
-    this.setMood(this.mood)
-    return true
+    if (!this.model || !this._container || !this._lastLoad) return Promise.resolve(false)
+    return this._enqueue(async () => {
+      const ll = this._lastLoad!
+      const target = this.style
+      if (target === this._appliedStyle) return false
+      // 记住当前姿态：重载后原位恢复，不做"回家"跳动；可见性一并保持（partner 可能处于隐藏态）
+      const px = this.model?.x ?? 0, py = this.model?.y ?? 0, pv = this.model?.visible ?? true
+      await this._swapNow(ll.container, ll.url, ll.scale, ll.tier)
+      if (this.model) { this.model.x = px; this.model.y = py; this.model.visible = pv }
+      this.setMood(this.mood)
+      return true
+    })
   }
 
   /**
    * 应用款式（V1.5.0 衣橱 2.0）：整张服装纹理替换，需重载模型（同 applyStyle 通道）。
-   * 'base' = 回到原生。模型未加载时仅记录，load 时自动生效。
+   * 'base' = 回到原生。模型未加载时仅记录，load 时自动生效。并发语义同 applyStyle。
    */
-  async applyVariant(variantId: string): Promise<boolean> {
+  applyVariant(variantId: string): Promise<boolean> {
     const next = variantId === 'base' || OUTFIT_VARIANTS[this._avatarId()]?.some((v) => v.id === variantId)
       ? variantId : 'base'
-    const prev = this.variant
     this.variant = next
-    if (next === prev || !this.model || !this._container || !this._lastLoad) return false
-    const { container, url, scale, tier } = this._lastLoad
-    const px = this.model.x, py = this.model.y, pv = this.model.visible
-    await this.swap(container, url, scale, tier)
-    if (this.model) { this.model.x = px; this.model.y = py; this.model.visible = pv }
-    this.setMood(this.mood)
-    return true
+    if (!this.model || !this._container || !this._lastLoad) return Promise.resolve(false)
+    return this._enqueue(async () => {
+      const ll = this._lastLoad!
+      const target = this.variant
+      if (target === this._appliedVariant) return false
+      const px = this.model?.x ?? 0, py = this.model?.y ?? 0, pv = this.model?.visible ?? true
+      await this._swapNow(ll.container, ll.url, ll.scale, ll.tier)
+      if (this.model) { this.model.x = px; this.model.y = py; this.model.visible = pv }
+      this.setMood(this.mood)
+      return true
+    })
   }
 
   /** 当前加载模型的形象 id（applyVariant 校验变体合法性用） */
