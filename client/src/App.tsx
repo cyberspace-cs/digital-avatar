@@ -98,13 +98,24 @@ export default function App() {
   const [partnerOnline, setPartnerOnline] = useState(false)
   const [inviteLink, setInviteLink] = useState('')
   const [toast, setToast] = useState('')
+  const [partnerMood, setPartnerMood] = useState<Mood | null>(null)
   // V1.2 小火人化：Tab 壳 + 火花成长
   const [tab, setTab] = useState<Tab>('companion')
   const [bond, setBond] = useState<BondMeta | null>(null)
   const [quests, setQuests] = useState<QuestItem[]>([])
 
-  const stateRef = useRef({ mood, visibility, me, partner })
-  stateRef.current = { mood, visibility, me, partner }
+  // 对方 Live2D 模型懒加载器：未绑定用户不加载 Natori（省一半首屏带宽），绑定后才拉起
+  const partnerLoaderRef = useRef<(() => void) | null>(null)
+
+  const stateRef = useRef({ mood, visibility, me, partner, partnerMood, bond })
+  stateRef.current = { mood, visibility, me, partner, partnerMood, bond }
+
+  // toast 自动消失（升级提示/绑定提示/互动提示统一走这条）
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(''), 2600)
+    return () => clearTimeout(t)
+  }, [toast])
 
   // ---------- 初始化身份 ----------
   useEffect(() => {
@@ -153,19 +164,31 @@ export default function App() {
     meSprite.current = meS
     partnerSprite.current = partnerS
 
-    Promise.all([
-      meS.load(app.stage, MY_MODEL, MODEL_SCALE, tier),
-      partnerS.load(app.stage, PARTNER_MODEL, MODEL_SCALE, tier),
-    ]).then(() => {
-      // 绑定关系可能在模型加载完成前就已就绪（getPartner 比模型加载快），
-      // 这里按当前状态决定可见性，否则要等下一次 partner 变化才会显示
-      partnerS.model!.visible = !!stateRef.current.partner
+    // 自己的模型立即加载；对方的模型懒加载（绑定后才拉起，未绑定用户首屏减半）
+    meS.load(app.stage, MY_MODEL, MODEL_SCALE, tier).then(() => {
       meS.setPosition(window.innerWidth * 0.35, window.innerHeight * 0.78)
-      partnerS.setPosition(window.innerWidth * 0.65, window.innerHeight * 0.78)
       bindDrag(meS, 'me')
-      bindDrag(partnerS, 'partner')
         ; (window as any).__stageReady = true
     })
+
+    let partnerLoading = false
+    const loadPartnerModel = () => {
+      if (partnerLoading || partnerS.model) return
+      partnerLoading = true
+      partnerS.load(app.stage, PARTNER_MODEL, MODEL_SCALE, tier).then(() => {
+        partnerS.setPosition(window.innerWidth * 0.65, window.innerHeight * 0.78)
+        bindDrag(partnerS, 'partner')
+        // 加载完成时按当前状态决定可见性与表情（getPartner 可能早已返回，竞态兜底）
+        partnerS.model!.visible = !!stateRef.current.partner
+        const st = stateRef.current
+        if (st.bond?.cold) partnerS.setMood('low')
+        else partnerS.setMood(st.partnerMood ?? 'neutral')
+      })
+    }
+    partnerLoaderRef.current = loadPartnerModel
+
+    // 自动化测试/调试探针（生产保留无害，仅供控制台检查舞台状态）
+    ;(window as any).__pixi = { app, meS, partnerS }
 
     app.ticker.add(() => {
       meS.tick()
@@ -179,35 +202,75 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---------- 绑定后显示对方分身 ----------
+  // ---------- 绑定后拉起对方模型并显示 ----------
   useEffect(() => {
-    if (partner && partnerSprite.current?.model) {
+    if (!partner) return
+    partnerLoaderRef.current?.()
+    if (partnerSprite.current?.model) {
       partnerSprite.current.model.visible = true
     }
   }, [partner])
 
-  // ---------- 拖拽 + 边缘姿态 ----------
+  // ---------- 拖拽 + 边缘姿态 + 触屏长按菜单 ----------
   const bindDrag = (sprite: AvatarSprite, who: 'me' | 'partner') => {
     let dragging = false
     let moved = 0
     let last = { x: 0, y: 0 }
+    let pressTimer: number | null = null
     const model = sprite.model!
+
+    // 菜单弹出坐标夹取在视口内（触屏点小人边缘时不至于被截断）
+    const openMenuAt = (x: number, y: number) => {
+      setMenu({
+        x: Math.min(Math.max(12, x), window.innerWidth - 200),
+        y: Math.min(Math.max(12, y), window.innerHeight - 320),
+        target: who,
+      })
+    }
+
     model.on('pointerdown', (e: PIXI.InteractionEvent) => {
       dragging = true
       moved = 0
-      last = e.data.global.clone()
+      const g = e.data.global
+      last = { x: g.x, y: g.y }
+      // 触屏长按 550ms = 菜单（桌面右键走 rightdown）；移动超过阈值即视为拖拽并取消
+      if (pressTimer != null) clearTimeout(pressTimer)
+      pressTimer = window.setTimeout(() => {
+        pressTimer = null
+        if (!dragging || moved >= 10) return
+        dragging = false
+        openMenuAt(g.x, g.y)
+      }, 550)
     })
+
     const onMove = (e: PointerEvent) => {
       if (!dragging) return
-      moved += Math.abs(e.movementX) + Math.abs(e.movementY)
-      const nx = Math.min(window.innerWidth - 60, Math.max(60, model.x + e.movementX))
-      const ny = Math.min(window.innerHeight - 40, Math.max(120, model.y + e.movementY))
-      model.x = nx
-      model.y = ny
+      // 触屏 PointerEvent.movementX/Y 常为 undefined → NaN 会把模型坐标算飞；
+      // 统一用 clientX/Y 差值（autoDensity 下 PIXI 全局坐标 == CSS 像素）
+      const dx = e.clientX - last.x
+      const dy = e.clientY - last.y
+      last = { x: e.clientX, y: e.clientY }
+      moved += Math.abs(dx) + Math.abs(dy)
+      if (moved >= 10 && pressTimer != null) {
+        clearTimeout(pressTimer)
+        pressTimer = null
+      }
+      model.x = Math.min(window.innerWidth - 60, Math.max(60, model.x + dx))
+      model.y = Math.min(window.innerHeight - 40, Math.max(120, model.y + dy))
+      // 同步 target/home：否则 tick() 的 lerp 会把模型往原位拉，拖拽像在跟自己较劲
+      sprite.cancelReturn()
+      sprite.target.x = model.x
+      sprite.target.y = model.y
+      sprite.home.x = model.x
+      sprite.home.y = model.y
     }
-    const onUp = (e: PointerEvent) => {
+    const onUp = () => {
       if (!dragging) return
       dragging = false
+      if (pressTimer != null) {
+        clearTimeout(pressTimer)
+        pressTimer = null
+      }
       if (moved < 6) {
         // 单击：默认互动
         if (who === 'partner') {
@@ -219,11 +282,20 @@ export default function App() {
         edgePose(sprite)
       }
     }
+    const onCancel = () => {
+      dragging = false
+      if (pressTimer != null) {
+        clearTimeout(pressTimer)
+        pressTimer = null
+      }
+    }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
+
     model.on('rightdown', (e: PIXI.InteractionEvent) => {
       e.data.originalEvent.preventDefault()
-      setMenu({ x: e.data.global.x, y: e.data.global.y, target: who })
+      openMenuAt(e.data.global.x, e.data.global.y)
     })
     sprite.model!.on('pointerdown', () => sprite.model!.cursor = 'grab')
   }
@@ -253,7 +325,12 @@ export default function App() {
   // ---------- 发送互动 ----------
   const sendAction = useCallback((action: string, message?: string) => {
     const cur = stateRef.current
-    if (!cur.me || !cur.partner) return
+    if (!cur.me) return
+    // 未绑定时给出明确引导，而不是按钮点了没反应
+    if (!cur.partner) {
+      setToast('先把分身送给 TA，绑定后就能互动啦 🎁')
+      return
+    }
     emit('interaction', {
       senderId: cur.me.id,
       receiverId: cur.partner.id,
@@ -374,8 +451,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me])
 
-  const [partnerMood, setPartnerMood] = useState<Mood | null>(null)
-
   // ---------- 断联软惩罚：火花变灰时，仅对 neutral 的分身叠加沮丧表情 ----------
   useEffect(() => {
     if (!bond) return
@@ -423,7 +498,8 @@ export default function App() {
   const makeInvite = async () => {
     if (!me) return
     const { code } = await api.createInvite(me.id)
-    const link = `${location.origin}?invite=${code}`
+    // 生产部署在 /digital-avatar/ 子路径：邀请链接必须带 BASE_URL，否则 TA 打开是作品集首页
+    const link = `${location.origin}${import.meta.env.BASE_URL}?invite=${code}`
     setInviteLink(link)
     navigator.clipboard?.writeText(link).catch(() => { })
   }
@@ -435,12 +511,15 @@ export default function App() {
   }
 
   // ================= 渲染 =================
-  // canvas-host 必须常驻：PIXI 初始化 effect 只在挂载时跑一次
-  if (!me) {
-    return (
-      <div className="space">
-        <div className="aurora" aria-hidden><span /><span /><span /></div>
-        <div ref={canvasHost} className="canvas-host" />
+  // 关键：canvas-host 必须是 .space 的第一个、且永远存在的子节点。
+  // 若引导页/主界面各写一个 return，React 换树时会重建 canvas-host 节点，
+  // 已 append 进去的 Pixi canvas 会随旧节点一起被丢弃 → 分身消失（只能靠碰运气的 DOM 复用）。
+  return (
+    <div className="space">
+      <div ref={canvasHost} className="canvas-host" />
+      <div className="aurora" aria-hidden><span /><span /><span /></div>
+
+      {!me ? (
         <div className="onboard">
           <div className="onboard-card">
             <h1>数字分身</h1>
@@ -454,253 +533,242 @@ export default function App() {
             <button onClick={createIdentity}>创建我的分身</button>
           </div>
         </div>
-        <button
-          className="theme-switch"
-          title="切换 UI 版本"
-          onClick={() => setTheme(theme === 'v1' ? 'v2' : 'v1')}
-        >
-          🎨
-        </button>
-      </div>
-    )
-  }
-
-  return (
-    <div className="space">
-      <div className="aurora" aria-hidden><span /><span /><span /></div>
-      {/* 等级光晕：火花等级越高越亮，断联时熄灭 */}
-      {bond && !bond.cold && (
-        <div
-          className="spark-glow"
-          style={{ opacity: 0.25 + (bond.level / 7) * 0.55 }}
-          aria-hidden
-        />
-      )}
-      <div ref={canvasHost} className="canvas-host" />
-
-      {/* 顶栏（精简：状态设置收进「我的」Tab） */}
-      <div className="topbar">
-        <div className="brand">数字分身</div>
-        <div className="topbar-right">
-          {partner ? (
-            <span className="chip">
-              {partner.name} {partnerOnline ? '🟢' : '⚪'}
-              {partnerMood && partnerMood !== 'neutral' && ` · ${MOOD_LABELS[partnerMood]}`}
-            </span>
-          ) : (
-            <button className="btn ghost" onClick={makeInvite}>把我的分身送给 TA</button>
-          )}
-        </div>
-      </div>
-
-      {/* 火花关系卡（陪伴 Tab） */}
-      {tab === 'companion' && bond && (
-        <div className={`bond-card ${bond.cold ? 'cold' : ''}`}>
-          <div className="bond-row">
-            <span className="flame">{bond.cold ? '🕯️' : '🔥'}</span>
-            <span className="bond-title">火花 Lv.{bond.level} {bond.levelName}</span>
-            <span className="bond-streak">
-              {bond.cold ? '火花休息中' : `连续 ${bond.streak} 天`}
-            </span>
-          </div>
-          <div className="spark-bar">
+      ) : (
+        <>
+          {/* 等级光晕：火花等级越高越亮，断联时熄灭 */}
+          {bond && !bond.cold && (
             <div
-              className="spark-fill"
-              style={{ width: `${sparkPct(bond)}%` }}
+              className="spark-glow"
+              style={{ opacity: 0.25 + (bond.level / 7) * 0.55 }}
+              aria-hidden
             />
-          </div>
-        </div>
-      )}
+          )}
 
-      {/* 互动 Dock（陪伴 Tab） */}
-      {tab === 'companion' && (
-        <div className="dock">
-          {DOCK.map((d) => (
-            <button key={d.id} className="dock-btn" onClick={() => sendAction(d.id)}>
-              <span className="dock-emoji">{d.emoji}</span>
-              <span className="dock-label">{labelOf(d.id)}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* 任务 Tab */}
-      {tab === 'quests' && (
-        <div className="panel">
-          <div className={`panel-card remind ${bond?.cold ? 'cold' : ''}`}>
-            {bond?.cold
-              ? '🕯️ 今天你们还没互动，火花休息中——互相任意互动 1 次即可复燃'
-              : bond
-                ? `🔥 火花正旺！已连续 ${bond.streak} 天，今天互动过了`
-                : '🤝 绑定 TA 后开启每日任务和火花养成'}
-          </div>
-          {quests.map((q) => (
-            <div key={q.id} className={`panel-card quest ${q.rewarded ? 'rewarded' : ''}`}>
-              <div className="quest-row">
-                <span>{q.label}</span>
-                <span className={q.rewarded ? 'ok' : q.done ? 'ready' : ''}>
-                  {q.rewarded ? `+${q.reward} ✓` : `${q.progress}/${q.target}`}
+          {/* 顶栏（精简：状态设置收进「我的」Tab） */}
+          <div className="topbar">
+            <div className="brand">数字分身</div>
+            <div className="topbar-right">
+              {partner ? (
+                <span className="chip">
+                  {partner.name} {partnerOnline ? '🟢' : '⚪'}
+                  {partnerMood && partnerMood !== 'neutral' && ` · ${MOOD_LABELS[partnerMood]}`}
                 </span>
-              </div>
-              <div className="quest-bar">
-                <div style={{ width: `${(q.progress / q.target) * 100}%` }} />
-              </div>
-              <div className="quest-reward">完成 +{q.reward} 火花</div>
+              ) : (
+                <button className="btn ghost" onClick={makeInvite}>把我的分身送给 TA</button>
+              )}
             </div>
-          ))}
-        </div>
-      )}
-
-      {/* 记录 Tab */}
-      {tab === 'records' && (
-        <div className="panel">
-          {events.length === 0 && <p className="sub">还没有互动，去戳戳 TA 吧</p>}
-          <ul className="records-list">
-            {events.map((ev) => (
-              <li key={ev.id}>
-                <span className="time">
-                  {parseTime(ev.createdAt).toLocaleString('zh-CN', {
-                    month: 'numeric',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </span>
-                <span>
-                  {ev.senderId === me.id ? '你' : partner?.name ?? 'TA'}
-                  {ev.message
-                    ? ` 说：${ev.message}`
-                    : ` ${labelOf(ev.action)}`}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* 我的 Tab */}
-      {tab === 'me' && (
-        <div className="panel">
-          <div className="panel-card">
-            <h3>{me.name}</h3>
-            <p className="sub">
-              {partner
-                ? `与 ${partner.name} 已绑定 ❤${bond ? ` · 火花 Lv.${bond.level} ${bond.levelName}` : ''}`
-                : '还没有绑定 TA'}
-            </p>
           </div>
-          <div className="panel-card">
-            <button className="btn block" onClick={() => setShowMoodPicker(true)}>
-              设置状态 · 当前：{MOOD_LABELS[mood]} / {VIS_LABELS[visibility]}
-            </button>
-            {!partner && (
-              <button className="btn ghost block" onClick={makeInvite}>
-                把我的分身送给 TA
+
+          {/* 火花关系卡（陪伴 Tab） */}
+          {tab === 'companion' && bond && (
+            <div className={`bond-card ${bond.cold ? 'cold' : ''}`}>
+              <div className="bond-row">
+                <span className="flame">{bond.cold ? '🕯️' : '🔥'}</span>
+                <span className="bond-title">火花 Lv.{bond.level} {bond.levelName}</span>
+                <span className="bond-streak">
+                  {bond.cold ? '火花休息中' : `连续 ${bond.streak} 天`}
+                </span>
+              </div>
+              <div className="spark-bar">
+                <div
+                  className="spark-fill"
+                  style={{ width: `${sparkPct(bond)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* 互动 Dock（陪伴 Tab） */}
+          {tab === 'companion' && (
+            <div className="dock">
+              {DOCK.map((d) => (
+                <button key={d.id} className="dock-btn" onClick={() => sendAction(d.id)}>
+                  <span className="dock-emoji">{d.emoji}</span>
+                  <span className="dock-label">{labelOf(d.id)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* 任务 Tab */}
+          {tab === 'quests' && (
+            <div className="panel">
+              <div className={`panel-card remind ${bond?.cold ? 'cold' : ''}`}>
+                {bond?.cold
+                  ? '🕯️ 今天你们还没互动，火花休息中——互相任意互动 1 次即可复燃'
+                  : bond
+                    ? `🔥 火花正旺！已连续 ${bond.streak} 天，今天互动过了`
+                    : '🤝 绑定 TA 后开启每日任务和火花养成'}
+              </div>
+              {quests.map((q) => (
+                <div key={q.id} className={`panel-card quest ${q.rewarded ? 'rewarded' : ''}`}>
+                  <div className="quest-row">
+                    <span>{q.label}</span>
+                    <span className={q.rewarded ? 'ok' : q.done ? 'ready' : ''}>
+                      {q.rewarded ? `+${q.reward} ✓` : `${q.progress}/${q.target}`}
+                    </span>
+                  </div>
+                  <div className="quest-bar">
+                    <div style={{ width: `${(q.progress / q.target) * 100}%` }} />
+                  </div>
+                  <div className="quest-reward">完成 +{q.reward} 火花</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 记录 Tab */}
+          {tab === 'records' && (
+            <div className="panel">
+              {events.length === 0 && <p className="sub">还没有互动，去戳戳 TA 吧</p>}
+              <ul className="records-list">
+                {events.map((ev) => (
+                  <li key={ev.id}>
+                    <span className="time">
+                      {parseTime(ev.createdAt).toLocaleString('zh-CN', {
+                        month: 'numeric',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                    <span>
+                      {ev.senderId === me.id ? '你' : partner?.name ?? 'TA'}
+                      {ev.message
+                        ? ` 说：${ev.message}`
+                        : ` ${labelOf(ev.action)}`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 我的 Tab */}
+          {tab === 'me' && (
+            <div className="panel">
+              <div className="panel-card">
+                <h3>{me.name}</h3>
+                <p className="sub">
+                  {partner
+                    ? `与 ${partner.name} 已绑定 ❤${bond ? ` · 火花 Lv.${bond.level} ${bond.levelName}` : ''}`
+                    : '还没有绑定 TA'}
+                </p>
+              </div>
+              <div className="panel-card">
+                <button className="btn block" onClick={() => setShowMoodPicker(true)}>
+                  设置状态 · 当前：{MOOD_LABELS[mood]} / {VIS_LABELS[visibility]}
+                </button>
+                {!partner && (
+                  <button className="btn ghost block" onClick={makeInvite}>
+                    把我的分身送给 TA
+                  </button>
+                )}
+                <button className="btn ghost block" onClick={() => setTheme(theme === 'v1' ? 'v2' : 'v1')}>
+                  🎨 切换主题（当前：{theme === 'v1' ? 'v1 经典' : 'v2 极光'}）
+                </button>
+              </div>
+              <p className="sub center tiny">数字分身 V1.2 · 小火人化</p>
+            </div>
+          )}
+
+          {/* 底部 Tab 导航 */}
+          <nav className="tabbar">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                className={`tab ${tab === t.id ? 'active' : ''}`}
+                onClick={() => setTab(t.id)}
+              >
+                <span className="tab-emoji">{t.emoji}</span>
+                <span className="tab-label">{t.label}</span>
               </button>
-            )}
-            <button className="btn ghost block" onClick={() => setTheme(theme === 'v1' ? 'v2' : 'v1')}>
-              🎨 切换主题（当前：{theme === 'v1' ? 'v1 经典' : 'v2 极光'}）
-            </button>
-          </div>
-          <p className="sub center tiny">数字分身 V1.2 · 小火人化</p>
-        </div>
-      )}
+            ))}
+          </nav>
 
-      {/* 底部 Tab 导航 */}
-      <nav className="tabbar">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            className={`tab ${tab === t.id ? 'active' : ''}`}
-            onClick={() => setTab(t.id)}
-          >
-            <span className="tab-emoji">{t.emoji}</span>
-            <span className="tab-label">{t.label}</span>
-          </button>
-        ))}
-      </nav>
-
-      {/* 邀请链接弹窗 */}
-      {inviteLink && (
-        <div className="modal" onClick={() => setInviteLink('')}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <h3>把链接发给 TA</h3>
-            <p className="link-text">{inviteLink}</p>
-            <p className="sub">链接已复制。TA 打开接受后，你的分身就会住进 TA 的设备里</p>
-            <button className="btn" onClick={() => setInviteLink('')}>好</button>
-          </div>
-        </div>
-      )}
-
-      {/* 小人菜单 */}
-      {menu && (
-        <div className="ctxmenu" style={{ left: menu.x, top: menu.y }}>
-          {menu.target === 'partner' && (
-            <>
-              <div className="ctxmenu-title">给 {partner?.name}</div>
-              {ACTIONS.map((a) => (
-                <button key={a.id} onClick={() => sendAction(a.id)}>
-                  {a.label}
-                </button>
-              ))}
-              <SayInput onSend={sendShortMessage} />
-            </>
-          )}
-          {menu.target === 'me' && (
-            <div className="ctxmenu-title">这是你自己的分身哦</div>
-          )}
-          <button className="ctxmenu-close" onClick={() => setMenu(null)}>×</button>
-        </div>
-      )}
-
-      {/* 状态选择器 */}
-      {showMoodPicker && (
-        <div className="modal" onClick={() => setShowMoodPicker(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <h3>现在感觉怎么样？</h3>
-            <div className="mood-grid">
-              {(Object.keys(MOOD_LABELS) as Mood[]).map((m) => (
-                <button
-                  key={m}
-                  className={`btn ${mood === m ? 'active' : ''}`}
-                  onClick={() => applyMood(m, visibility)}
-                >
-                  {MOOD_LABELS[m]}
-                </button>
-              ))}
+          {/* 邀请链接弹窗 */}
+          {inviteLink && (
+            <div className="modal" onClick={() => setInviteLink('')}>
+              <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+                <h3>把链接发给 TA</h3>
+                <p className="link-text">{inviteLink}</p>
+                <p className="sub">链接已复制。TA 打开接受后，你的分身就会住进 TA 的设备里</p>
+                <button className="btn" onClick={() => setInviteLink('')}>好</button>
+              </div>
             </div>
-            <h4>谁能看到</h4>
-            <div className="mood-grid">
-              {(Object.keys(VIS_LABELS) as Visibility[]).map((v) => (
-                <button
-                  key={v}
-                  className={`btn ${visibility === v ? 'active' : ''}`}
-                  onClick={() => applyMood(mood, v)}
-                >
-                  {VIS_LABELS[v]}
-                </button>
-              ))}
+          )}
+
+          {/* 小人菜单 */}
+          {menu && (
+            <div className="ctxmenu" style={{ left: menu.x, top: menu.y }}>
+              {menu.target === 'partner' && (
+                <>
+                  <div className="ctxmenu-title">给 {partner?.name}</div>
+                  {ACTIONS.map((a) => (
+                    <button key={a.id} onClick={() => sendAction(a.id)}>
+                      {a.label}
+                    </button>
+                  ))}
+                  <SayInput onSend={sendShortMessage} />
+                </>
+              )}
+              {menu.target === 'me' && (
+                <div className="ctxmenu-title">这是你自己的分身哦</div>
+              )}
+              <button className="ctxmenu-close" onClick={() => setMenu(null)}>×</button>
             </div>
-            {visibility === 'discover-after' && (
-              <p className="sub">对方互动后，你的分身会用不一样的方式回应 TA</p>
-            )}
-          </div>
-        </div>
+          )}
+
+          {/* 状态选择器 */}
+          {showMoodPicker && (
+            <div className="modal" onClick={() => setShowMoodPicker(false)}>
+              <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+                <h3>现在感觉怎么样？</h3>
+                <div className="mood-grid">
+                  {(Object.keys(MOOD_LABELS) as Mood[]).map((m) => (
+                    <button
+                      key={m}
+                      className={`btn ${mood === m ? 'active' : ''}`}
+                      onClick={() => applyMood(m, visibility)}
+                    >
+                      {MOOD_LABELS[m]}
+                    </button>
+                  ))}
+                </div>
+                <h4>谁能看到</h4>
+                <div className="mood-grid">
+                  {(Object.keys(VIS_LABELS) as Visibility[]).map((v) => (
+                    <button
+                      key={v}
+                      className={`btn ${visibility === v ? 'active' : ''}`}
+                      onClick={() => applyMood(mood, v)}
+                    >
+                      {VIS_LABELS[v]}
+                    </button>
+                  ))}
+                </div>
+                {visibility === 'discover-after' && (
+                  <p className="sub">对方互动后，你的分身会用不一样的方式回应 TA</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 短句气泡 */}
+          {bubble && (
+            <div className={`bubble ${bubble.who}`}>{bubble.text}</div>
+          )}
+
+          {/* 粒子（心/蛋糕/花） */}
+          {hearts.map((h) => (
+            <div key={h.id} className="heart" style={{ left: h.x, top: h.y }}>
+              {h.emoji}
+            </div>
+          ))}
+
+          {toast && <div className="toast">{toast}</div>}
+        </>
       )}
-
-      {/* 短句气泡 */}
-      {bubble && (
-        <div className={`bubble ${bubble.who}`}>{bubble.text}</div>
-      )}
-
-      {/* 粒子（心/蛋糕/花） */}
-      {hearts.map((h) => (
-        <div key={h.id} className="heart" style={{ left: h.x, top: h.y }}>
-          {h.emoji}
-        </div>
-      ))}
-
-      {toast && <div className="toast">{toast}</div>}
 
       {/* UI 版本对比切换（v1 初版 / v2 aurora-glass） */}
       <button

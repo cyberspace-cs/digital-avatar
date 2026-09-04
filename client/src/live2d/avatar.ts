@@ -342,6 +342,9 @@ export class AvatarSprite {
   /** App.tsx 向后兼容：goHome() 是 returnHome() 的别名 */
   goHome() { this.returnHome() }
 
+  /** 拖拽时取消自动回位（回位 lerp 会与拖拽目标互相拉扯） */
+  cancelReturn() { this._returning = false }
+
   /** 接收方 mood === low 时的"负面反应"动作 */
   playSadReaction() {
     this.setMood('low')

@@ -46,6 +46,7 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
 }
 
 html,
@@ -140,6 +141,11 @@ body,
 .canvas-host canvas {
   position: absolute !important;
   inset: 0;
+  /* 触屏关键：把手势判定交给应用（拖拽小人），否则浏览器会把 pointermove
+     当成滚动/平移而发出 pointercancel，拖拽直接中断 */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* ---------- 顶栏 ---------- */
