@@ -2,6 +2,23 @@
 
 > 约定：每次文档/功能迭代，在此追加一条记录；文档改动同时在 `versions/` 存一份带时间戳的不可变副本。
 
+## [V1.6.0] 2026-09-05（master）—— 情侣衣橱：一键情侣主题 + 同色徽章 + 成套款式
+
+> 用户需求："情侣装要有：A.一键情侣主题、B.同色系呼应徽章、C.真·成套款式，详细设计 + loop 所有 + 上网调研补全测试面"。设计文档：[2026-09-05-couple-wardrobe-design.md](./superpowers/specs/2026-09-05-couple-wardrobe-design.md)。
+
+### 1. 三机制合一（详见 [versions 副本](./versions/20260905_1129_CHANGELOG_V1.6.0.md)）
+- **A 一键情侣装**：5 纯色主题，`POST /api/couple-outfit` 服务端权威结算（按双方形象性别分发槽位）+ `couple_applied` 双端推送；解除 = `none` 主题回原生
+- **B 情侣徽章**：`matchCoupleTheme` 纯客户端匹配点亮 ✨，服务端零新列；**成套款优先于同色纯色主题**（修复 seafog/seafog-plaid style 槽相同导致的高亮错位）
+- **C 成套款式**：gen 脚本程序化叠加格纹/心形曲线，4 套情侣针织纹理（Chitose knit_sea/knit_heart × Haru sailor_sea/sailor_heart），WebP+SD 四件套，替换区外零改动校验通过
+
+### 2. 稳定性
+- **离线愈合**：启动/重连 `getState` 对齐服务端 style/outfit，离线期间被换装自动穿上
+- **上游竞态补丁**（pixi-setup.ts）：pixi-live2d-display 0.4.0 `ExpressionManager.loadExpression` 在模型销毁后 resolve 对已清空的 `this.expressions` 赋值 → unhandled rejection；补丁仅静默"已销毁"场景
+
+### 3. 验证（E2E [verify-v160.cjs](../client/verify-v160.cjs) 13/13 全绿）
+- T1-T10 基础面：UI 行显示/双端同步/免操作接收/徽章/成套款/双子装/解除/离线愈合/服务端守卫/纹理像素探针
+- **调研补全 T11-T13**（对标 DZone 实时应用测试、thegreenreport WebSocket Essentials、TestDevLab 幂等实践）：快速连点收敛、双端并发结算、同主题幂等重放零重载
+
 ## [V1.5.1] 2026-09-05（master）—— 换色不生效双修复（兼容性 + 并发竞态）
 
 > 用户反馈："温柔青年真帅，但是每个形象的穿搭颜色都无法实现切换"。像素级探针（色相分桶统计换色前后 canvas 差异）在本地 preview 与生产 Chromium 均正常 → 锁定用户设备（Android 16 WebView / 微信 XWEB）特征，挖出两个真机必现根因。

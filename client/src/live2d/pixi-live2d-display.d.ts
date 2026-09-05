@@ -8,4 +8,8 @@ declare module 'pixi-live2d-display/cubism4' {
     internalModel: any
   }
   export const MotionPriority: { FORCE: number; IDLE: number; NORMAL: number }
+  export class ExpressionManager {
+    expressions: unknown[]
+    loadExpression(index: number | string): Promise<unknown>
+  }
 }

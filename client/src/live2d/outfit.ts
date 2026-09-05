@@ -157,11 +157,17 @@ export const OUTFIT_VARIANTS: Record<string, OutfitVariant[]> = {
     { id: 'base', label: '西装马甲', swatch: '#8d9cb5', gender: 'm', textures: {} },
     // 墨绿针织毛衣：西装→墨绿针织（带织纹噪点），格纹裤→深灰纯色，领带→琥珀金小点缀
     { id: 'knit', label: '针织毛衣', swatch: '#2f4f3a', gender: 'm', textures: { 'texture_00.png': 'outfits/knit/texture_00.png' } },
+    // V1.6.0 情侣成套款：与 Haru sailor_sea/sailor_heart 同图案（gen-outfit-variants.mjs 生成）
+    { id: 'knit_sea', label: '海雾格纹', swatch: '#3f5f8f', gender: 'm', textures: { 'texture_00.png': 'outfits/knit_sea/texture_00.png' } },
+    { id: 'knit_heart', label: '暮樱爱心', swatch: '#8a5c68', gender: 'm', textures: { 'texture_00.png': 'outfits/knit_heart/texture_00.png' } },
   ],
   haru: [
     { id: 'base', label: '西装裙', swatch: '#6a6f80', gender: 'f', textures: {} },
     // 水手服：灰西装裙→水手藏青，蓝条纹领巾→正红领巾（水手服经典）
     { id: 'sailor', label: '水手服', swatch: '#33486e', gender: 'f', textures: { 'texture_01.png': 'outfits/sailor/texture_01.png' } },
+    // V1.6.0 情侣成套款：与 Chitose knit_sea/knit_heart 同图案
+    { id: 'sailor_sea', label: '海雾格纹', swatch: '#8fd0f5', gender: 'f', textures: { 'texture_01.png': 'outfits/sailor_sea/texture_01.png' } },
+    { id: 'sailor_heart', label: '暮樱爱心', swatch: '#f59ec4', gender: 'f', textures: { 'texture_01.png': 'outfits/sailor_heart/texture_01.png' } },
   ],
 }
 

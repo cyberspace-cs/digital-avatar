@@ -96,6 +96,49 @@ app.get('/api/state/:userId', (req, res) => {
   })
 })
 
+// ---------- V1.6.0 情侣衣橱：一键情侣装（服务端权威结算） ----------
+// 与 client/src/live2d/couple.ts 保持镜像（服务端是结算权威，不能依赖客户端传槽位）
+const AVATAR_GENDER = { hiyori: 'f', haru: 'f', natori: 'm', chitose: 'm' }
+const COUPLE_THEMES = {
+  seafog: { label: '海雾情侣', m: { style: 'navy' }, f: { style: 'ocean' } },
+  duskcherry: { label: '暮樱情侣', m: { style: 'charcoal' }, f: { style: 'sakura' } },
+  wild: { label: '旷野情侣', m: { style: 'olive' }, f: { style: 'sunset' } },
+  midnight: { label: '暗夜情侣', m: { style: 'navy' }, f: { style: 'night' } },
+  mono: { label: '经典黑白', m: { style: 'mono' }, f: { style: 'mono' } },
+  // 成套款（真·同图案情侣针织，纹理见 client/public/models/*/outfits）：
+  // variant 仅对支持该变体的形象下发（Chitose knit_sea/knit_heart，Haru sailor_sea/sailor_heart）
+  'seafog-plaid': { label: '海雾格纹', m: { style: 'navy', variant: 'knit_sea' }, f: { style: 'ocean', variant: 'sailor_sea' } },
+  duskheart: { label: '暮樱爱心', m: { style: 'charcoal', variant: 'knit_heart' }, f: { style: 'sakura', variant: 'sailor_heart' } },
+  // 解除情侣装：双方回 原生+base（客户端"解除"按钮专用）
+  none: { label: '解除情侣装', m: { style: 'default' }, f: { style: 'default' } },
+}
+
+app.post('/api/couple-outfit', (req, res) => {
+  const { userId, themeId } = req.body ?? {}
+  const theme = COUPLE_THEMES[themeId]
+  if (!userId || !theme) return res.status(400).json({ error: 'userId and valid themeId required' })
+  const bond = q.bondsOf.get(userId, userId)
+  if (!bond) return res.status(400).json({ error: 'no_bond' })
+  const partnerId = bond.user_a === userId ? bond.user_b : bond.user_a
+  const members = []
+  for (const uid of [userId, partnerId]) {
+    const user = q.getUser.get(uid)
+    if (!user) return res.status(404).json({ error: `user not found: ${uid}` })
+    // 按各自形象的性别取对应槽位（同性别组合都取 m 槽 = 双子装）
+    const slot = AVATAR_GENDER[user.avatar] === 'f' ? theme.f : theme.m
+    const variant = slot.variant ?? 'base'
+    q.updateUserStyle.run(slot.style, uid)
+    q.updateUserOutfit.run(variant, uid)
+    members.push({ userId: uid, avatar: user.avatar, style: slot.style, outfit: variant })
+  }
+  // 向两端推送（含发起者；发起端用于确认+双端一致，避免乐观态与服务端漂移）
+  for (const m of members) {
+    const sock = online.get(m.userId)
+    if (sock) io.to(sock).emit('couple_applied', { themeId, by: userId, members })
+  }
+  res.json({ ok: true, themeId, members })
+})
+
 app.get('/api/events/:userId', (req, res) => {
   res.json({ events: q.eventsFor.all(req.params.userId, req.params.userId) })
 })

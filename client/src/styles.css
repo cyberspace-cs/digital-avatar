@@ -1044,3 +1044,58 @@ body,
 .pet-exit:active {
   transform: scale(0.92);
 }
+
+/* ---------- V1.6.0 情侣衣橱 ---------- */
+/* 一键情侣装 chips：双色渐变圆点 + 渐变描边，点亮时用主题色光晕 */
+.couple-row {
+  flex-wrap: wrap;
+}
+
+.couple-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.couple-chip .couple-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.35), inset 0 0 2px rgba(255, 255, 255, 0.4);
+}
+
+.couple-chip.active {
+  background: linear-gradient(135deg, var(--accent-soft), transparent);
+}
+
+/* 情侣徽章：火花卡 / 我的面板里的小胶囊 */
+.couple-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--text);
+  background: linear-gradient(135deg, rgba(255, 158, 196, 0.25), rgba(103, 232, 249, 0.25));
+  border: 1px solid var(--glass-border);
+  animation: coupleGlow 2.4s var(--ease) infinite alternate;
+}
+
+@keyframes coupleGlow {
+  from {
+    box-shadow: 0 0 4px rgba(255, 158, 196, 0.25);
+  }
+
+  to {
+    box-shadow: 0 0 14px rgba(103, 232, 249, 0.45);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .couple-badge {
+    animation: none;
+  }
+}

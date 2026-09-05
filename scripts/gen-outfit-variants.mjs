@@ -76,6 +76,103 @@ const JOBS = [
     solidRects: [],
     solid: null,
   },
+  // ---------- V1.6.0 情侣成套款（真·同图案情侣针织，双方 pattern 同步） ----------
+  {
+    avatar: 'chitose', variant: 'knit_sea', src: '/digital-avatar/models/chitose/chitose.2048/texture_00.png',
+    rects: [
+      [20, 1050, 550, 970],
+      [566, 1676, 420, 344],
+      [1030, 1030, 580, 1000],
+    ],
+    protect: [],
+    transform: /* JS */`
+      (h, s, v, x, y) => {
+        if (v < 0.12) return null
+        const redTie = (h >= 340 || h <= 15) && s >= 0.3
+        if (redTie) return [222, 0.6, Math.min(1, v * 0.78)] // 领带 → 藏青
+        const nv = Math.min(1, Math.max(0.06, 0.16 + v * 0.62 + (globalThis.__hash(x, y) - 0.5) * 0.07))
+        return [206, 0.42, nv] // 海雾蓝针织
+      }
+    `,
+    solidRects: [[566, 1676, 420, 344]],
+    solid: [208, 0.38],
+    pattern: { type: 'plaid', rgb: [255, 255, 255], alpha: 0.16, step: 48 }, // 与 sailor_sea 同款格纹
+  },
+  {
+    avatar: 'haru', variant: 'sailor_sea', src: '/digital-avatar/models/haru/Haru.2048/texture_01.png',
+    rects: [
+      [40, 0, 880, 960],
+      [920, 60, 720, 540],
+      [1740, 450, 280, 130],
+      [1130, 510, 370, 570],
+      [1620, 600, 340, 480],
+      [60, 1010, 660, 1014],
+      [700, 1090, 700, 610],
+      [1400, 1120, 520, 420],
+      [1580, 20, 440, 380],
+    ],
+    protect: [[1700, 1580, 320, 460]],
+    transform: /* JS */`
+      (h, s, v, x, y) => {
+        if (v < 0.12) return null
+        if (s < 0.08 && v > 0.85) return null // 白条纹保持
+        if (h >= 195 && h <= 250 && s >= 0.15) return [0, 0.04, 0.97] // 蓝领巾 → 白
+        if (s < 0.4) return [205, 0.45, v * 0.92] // 灰西装 → 海雾蓝
+        return null
+      }
+    `,
+    solidRects: [],
+    solid: null,
+    pattern: { type: 'plaid', rgb: [255, 255, 255], alpha: 0.14, step: 48 },
+  },
+  {
+    avatar: 'chitose', variant: 'knit_heart', src: '/digital-avatar/models/chitose/chitose.2048/texture_00.png',
+    rects: [
+      [20, 1050, 550, 970],
+      [566, 1676, 420, 344],
+      [1030, 1030, 580, 1000],
+    ],
+    protect: [],
+    transform: /* JS */`
+      (h, s, v, x, y) => {
+        if (v < 0.12) return null
+        const redTie = (h >= 340 || h <= 15) && s >= 0.3
+        if (redTie) return [335, 0.72, Math.min(1, v * 1.05)] // 领带 → 樱粉
+        const nv = Math.min(1, Math.max(0.06, 0.16 + v * 0.62 + (globalThis.__hash(x, y) - 0.5) * 0.07))
+        return [222, 0.16, nv] // 炭灰针织
+      }
+    `,
+    solidRects: [[566, 1676, 420, 344]],
+    solid: [222, 0.14],
+    pattern: { type: 'heart', rgb: [244, 154, 196], alpha: 0.55, step: 64 }, // 与 sailor_heart 同款爱心
+  },
+  {
+    avatar: 'haru', variant: 'sailor_heart', src: '/digital-avatar/models/haru/Haru.2048/texture_01.png',
+    rects: [
+      [40, 0, 880, 960],
+      [920, 60, 720, 540],
+      [1740, 450, 280, 130],
+      [1130, 510, 370, 570],
+      [1620, 600, 340, 480],
+      [60, 1010, 660, 1014],
+      [700, 1090, 700, 610],
+      [1400, 1120, 520, 420],
+      [1580, 20, 440, 380],
+    ],
+    protect: [[1700, 1580, 320, 460]],
+    transform: /* JS */`
+      (h, s, v, x, y) => {
+        if (v < 0.12) return null
+        if (s < 0.08 && v > 0.85) return null // 白条纹保持
+        if (h >= 195 && h <= 250 && s >= 0.15) return [0, 0.04, 0.97] // 蓝领巾 → 白
+        if (s < 0.4) return [335, 0.5, v] // 灰西装 → 樱粉
+        return null
+      }
+    `,
+    solidRects: [],
+    solid: null,
+    pattern: { type: 'heart', rgb: [255, 255, 255], alpha: 0.6, step: 64 },
+  },
 ]
 
 // 在浏览器页里执行的处理 + diff（Node 无解码器，借 headless canvas）
@@ -152,6 +249,32 @@ const pageJs = (job) => {
           if (Math.abs(nr + ng + nb - before) > 6) {
             changed++
             if (!inAny || protect.some((r) => inRect(px, py, r))) changedOutside++
+          }
+          // V1.6.0 情侣成套款：同款图案叠加（格纹/爱心图章），仅服装矩形内、非肤色像素
+          const P = job.pattern
+          if (P) {
+            const step = Math.round(P.step * k)
+            let on = false
+            if (P.type === 'plaid') {
+              const lw = Math.max(2, Math.round(3 * k))
+              on = (px % step) < lw || (py % step) < lw
+            } else if (P.type === 'heart') {
+              const u = ((px % step) / step) * 2 - 1
+              const w2 = ((py % step) / step) * 2 - 1
+              const hy = -w2 + 0.25
+              const a2 = u * u + hy * hy - 1
+              on = a2 * a2 * a2 - u * u * hy * hy * hy < 0 // 心形隐式曲线 (x²+y²−1)³−x²y³<0
+            }
+            if (on) {
+              const before2 = d[i] + d[i + 1] + d[i + 2]
+              d[i] = d[i] * (1 - P.alpha) + P.rgb[0] * P.alpha
+              d[i + 1] = d[i + 1] * (1 - P.alpha) + P.rgb[1] * P.alpha
+              d[i + 2] = d[i + 2] * (1 - P.alpha) + P.rgb[2] * P.alpha
+              if (Math.abs(d[i] + d[i + 1] + d[i + 2] - before2) > 6) {
+                changed++
+                if (!inAny) changedOutside++
+              }
+            }
           }
         }
       }

@@ -48,4 +48,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  // ---------- V1.6.0 情侣衣橱：一键情侣装（服务端按双方形象性别权威结算，'none' = 解除） ----------
+  coupleOutfit: (userId: string, themeId: string) =>
+    req<{ ok: boolean; themeId: string; members: { userId: string; avatar: string; style: string; outfit: string }[] }>(
+      '/api/couple-outfit',
+      { method: 'POST', body: JSON.stringify({ userId, themeId }) },
+    ),
 }

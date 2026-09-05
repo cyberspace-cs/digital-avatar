@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import * as PIXI from 'pixi.js'
 import './pixi-setup'
 import { AvatarSprite, OUTFIT_STYLES, OUTFIT_VARIANTS } from './live2d/avatar'
+import { COUPLE_THEMES, COUPLE_THEME_ORDER, matchCoupleTheme } from './live2d/couple'
 import { AVATAR_LIBRARY, AVATAR_LABELS, AVATAR_GENDER, MODEL_URLS, DEFAULT_AVATAR } from './live2d/models'
 import { PerfGovernor } from './live2d/perf'
 import type { QualityTier } from './live2d/perf'
@@ -108,6 +109,8 @@ export default function App() {
   const [myStyle, setMyStyle] = useState('default')
   // V1.5.0 衣橱 2.0：自己的款式（'base' = 原生；款式属于形象，换形象时回落 base）
   const [myOutfit, setMyOutfit] = useState('base')
+  // V1.6.0 情侣衣橱：对方的 style/outfit（徽章匹配 + couple_applied 应用）
+  const [partnerLook, setPartnerLook] = useState<{ style: string; outfit: string }>({ style: 'default', outfit: 'base' })
   // 首个模型加载中：给用户"分身登场中"反馈，而不是对着空白等
   const [booting, setBooting] = useState(true)
   // V1.4.3 桌宠模式：藏起整个 App 壳，只留一只可拖拽的小人 + 迷你互动坞
@@ -130,6 +133,17 @@ export default function App() {
   // V1.4.3：等回执的互动（eventId → applyGrowth），interaction_ack 到达时结算并清理
   const ackWaiters = useRef(new Map<string, (g: any) => void>())
   stateRef.current = { mood, visibility, me, partner, partnerMood, bond }
+
+  // V1.6.0 情侣徽章：双方 style/outfit 命中同一主题即点亮（纯客户端匹配，服务端零新列）
+  const coupleBadge = useMemo(
+    () => (partner ? matchCoupleTheme(myStyle, myOutfit, partnerLook.style, partnerLook.outfit) : null),
+    [partner, myStyle, myOutfit, partnerLook],
+  )
+  // 徽章点亮瞬间：双人头顶冒心（同主题只冒一次）
+  useEffect(() => {
+    if (coupleBadge) spawnCoupleHearts(coupleBadge.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coupleBadge?.id])
 
   // toast 自动消失（升级提示/绑定提示/互动提示统一走这条）
   useEffect(() => {
@@ -616,7 +630,11 @@ export default function App() {
       },
       state_update: (s: any) => {
         // V1.3 换装：对方换了形象/穿搭/款式，实时跟随
-        if (s.avatar || s.style || s.outfit) swapPartnerLook(s)
+        if (s.avatar || s.style || s.outfit) {
+          swapPartnerLook(s)
+          // V1.6.0：同步记录对方的 style/outfit（情侣徽章实时重算）
+          setPartnerLook((prev) => ({ style: s.style ?? prev.style, outfit: s.outfit ?? prev.outfit }))
+        }
         // 只在对方公开状态时展示；对方分身表情同步变化
         if (s.visibility === 'public') {
           setPartnerMood(s.mood)
@@ -640,6 +658,21 @@ export default function App() {
           waiter(ev.growth)
         }
       },
+      // V1.6.0 情侣装：服务端权威结算后的双端应用。
+      // 发起端也会收到回声 —— applyCoupleMemberSelf/swapPartnerLook 内部 _applied 判重，幂等零重载
+      couple_applied: (p: any) => {
+        const meId = stateRef.current.me?.id
+        if (!p?.members || !meId) return
+        const theme = COUPLE_THEMES[p.themeId]
+        for (const m of p.members) {
+          if (m.userId === meId) void applyCoupleMemberSelf(m)
+          else {
+            setPartnerLook({ style: m.style, outfit: m.outfit })
+            swapPartnerLook(m)
+          }
+        }
+        if (p.by !== meId && theme) setToast(`${theme.emoji} TA 给你换上了${theme.label}！`)
+      },
     })
     api.getPartner(me.id).then(async (r) => {
       if (!r.partner) return
@@ -652,6 +685,8 @@ export default function App() {
           partnerSprite.current?.setMood(st.state.mood)
         }
         if (st.style && st.style !== 'default') partnerSprite.current?.applyStyle(st.style)
+        // V1.6.0：记录对方的持久化穿搭（徽章匹配 + 衣橱高亮）
+        setPartnerLook({ style: st.style ?? 'default', outfit: st.outfit ?? 'base' })
       } catch (_e) { /* 忽略，避免阻塞 */ }
     })
     api.getState(me.id).then((r) => {
@@ -660,6 +695,23 @@ export default function App() {
         setVisibility(r.state.visibility)
         // 刷新后自己的分身也恢复到当前状态的表现
         meSprite.current?.setMood(r.state.mood)
+      }
+      // V1.6.0：服务端权威对齐 style/outfit —— 离线期间 TA 给你换了情侣装（或你在
+      // 另一台设备改了装）时，localStorage 是旧的，这里拉齐并热更新分身
+      const stNow = r.style ?? 'default'
+      const ofNow = r.outfit ?? 'base'
+      if (stNow !== localStorage.getItem('da_style') || ofNow !== (localStorage.getItem('da_outfit') ?? 'base')) {
+        setMyStyle(stNow)
+        localStorage.setItem('da_style', stNow)
+        setMyOutfit(ofNow)
+        localStorage.setItem('da_outfit', ofNow)
+        const s = meSprite.current
+        if (s) {
+          s.style = stNow
+          s.variant = ofNow
+          s.applyVariant(ofNow).catch(() => {})
+          s.applyStyle(stNow).catch(() => {})
+        }
       }
     })
     api.getEvents(me.id).then((r) => setEvents(r.events))
@@ -787,6 +839,81 @@ export default function App() {
     setToast(styleId === 'default' ? '已换回原生' : `已换上 ${label}`)
   }
 
+  // ---------- V1.6.0 情侣衣橱 ----------
+  /** 把服务端结算的 member 穿搭应用到自己身上（发起端/接收端共用；_applied 判重保证零重载幂等） */
+  const applyCoupleMemberSelf = async (m: { style: string; outfit: string }) => {
+    setMyStyle(m.style)
+    localStorage.setItem('da_style', m.style)
+    setMyOutfit(m.outfit)
+    localStorage.setItem('da_outfit', m.outfit)
+    const s = meSprite.current
+    if (!s) return
+    // 先设字段再走 applyVariant→applyStyle：applyVariant 重载时已带上新 style（单次加载双轴生效），
+    // applyStyle 若已被同一轮 load 应用过则 _applied 判重直接跳过
+    s.style = m.style
+    s.variant = m.outfit
+    await s.applyVariant(m.outfit)
+    await s.applyStyle(m.style)
+  }
+
+  /** 点亮情侣装同款时的双人冒心（同主题只冒一次，避免徽章重算反复触发） */
+  const coupleHeartsFired = useRef<string | null>(null)
+  const spawnCoupleHearts = (themeId: string) => {
+    if (coupleHeartsFired.current === themeId) return
+    coupleHeartsFired.current = themeId
+    for (const sp of [meSprite.current, partnerSprite.current]) {
+      const model = sp?.model
+      if (!model) continue
+      const b = model.getBounds()
+      spawnHearts(b.x + b.width / 2, b.y - 10, 5, '💖')
+    }
+  }
+
+  /** 一键情侣装：服务端权威结算 → 双端应用（本地乐观 + couple_applied 回声幂等） */
+  const applyCoupleTheme = async (themeId: string) => {
+    if (!me || !partner) return
+    const theme = COUPLE_THEMES[themeId]
+    if (!theme) return
+    setToast(`换上${theme.label}…`)
+    try {
+      const r = await api.coupleOutfit(me.id, themeId)
+      const members: any[] = r.members ?? []
+      const self = members.find((m) => m.userId === me.id)
+      const other = members.find((m) => m.userId !== me.id)
+      if (self) await applyCoupleMemberSelf(self)
+      if (other) {
+        setPartnerLook({ style: other.style, outfit: other.outfit })
+        swapPartnerLook(other)
+      }
+      spawnCoupleHearts(themeId)
+      setToast(`${theme.emoji} ${theme.label}已同步到两端`)
+    } catch (e: any) {
+      const msg: string = e?.message ?? ''
+      setToast(msg.includes('no_bond') ? '还没有和 TA 绑定哦' : '情侣装同步失败，请稍后重试')
+    }
+  }
+
+  /** 解除情侣装：双方回 原生+base（服务端 'none' 主题结算） */
+  const applyCoupleReset = async () => {
+    if (!me || !partner) return
+    setToast('解除情侣装…')
+    try {
+      const r = await api.coupleOutfit(me.id, 'none')
+      const members: any[] = r.members ?? []
+      const self = members.find((m) => m.userId === me.id)
+      const other = members.find((m) => m.userId !== me.id)
+      if (self) await applyCoupleMemberSelf(self)
+      if (other) {
+        setPartnerLook({ style: other.style, outfit: other.outfit })
+        swapPartnerLook(other)
+      }
+      coupleHeartsFired.current = null
+      setToast('已解除情侣装')
+    } catch (_e) {
+      setToast('解除失败，请稍后重试')
+    }
+  }
+
   /** 对方换装（socket 通知到达时换 TA 的模型/穿搭/款式） */
   const swapPartnerLook = (look: { avatar?: string; style?: string; outfit?: string }) => {
     const app = appRef.current
@@ -816,7 +943,9 @@ export default function App() {
         })
         .catch((e) => console.error('[swap] 对方形象加载失败', e))
     } else if (look.outfit && look.outfit !== (sprite.variant ?? 'base')) {
-      // 仅换款式：applyVariant 内部按原参数重载（保持位置/可见性/心情）
+      // 换款式（可能连颜色一起，如情侣装下发）：先同步 style 字段，
+      // applyVariant 单次重载即双轴生效；颜色没变时 applyStyle 后续会被 _applied 判重跳过
+      if (look.style && (OUTFIT_STYLES as any)[look.style]) sprite.style = look.style
       sprite.applyVariant(look.outfit).catch((e) => console.error('[swap] 对方换款式失败', e))
     } else if (look.style) {
       // 仅换风格：applyStyle 内部按原参数重载（保持位置/可见性/心情）
@@ -924,6 +1053,8 @@ export default function App() {
                 <span className="bond-streak">
                   {bond.cold ? '火花休息中' : `连续 ${bond.streak} 天`}
                 </span>
+                {/* V1.6.0 情侣徽章：双方穿搭命中同一情侣主题时点亮 */}
+                {coupleBadge && <span className="couple-badge">✨ {coupleBadge.emoji} {coupleBadge.label}</span>}
               </div>
               <div className="spark-bar">
                 <div
@@ -1025,6 +1156,9 @@ export default function App() {
                   {partner
                     ? `与 ${partner.name} 已绑定 ❤${bond ? ` · 火花 Lv.${bond.level} ${bond.levelName}` : ''}`
                     : '还没有绑定 TA'}
+                  {coupleBadge && (
+                    <span className="couple-badge">✨ {coupleBadge.emoji} {coupleBadge.label}</span>
+                  )}
                 </p>
               </div>
               {/* V1.3.2 形象库（配置化）+ 穿搭风格，双端实时同步 */}
@@ -1062,6 +1196,37 @@ export default function App() {
                         <span className="style-label">{v.label}</span>
                       </button>
                     ))}
+                  </div>
+                )}
+                <h4>情侣装</h4>
+                {/* V1.6.0 一键情侣装：有 partner 才显示。服务端权威结算（按双方形象性别取槽位），双端同步 */}
+                {partner && (
+                  <div className="wardrobe-row couple-row">
+                    {COUPLE_THEME_ORDER.map((id) => {
+                      const t = COUPLE_THEMES[id]
+                      const active = coupleBadge?.id === id
+                      return (
+                        <button
+                          key={id}
+                          className={`style-chip couple-chip ${active ? 'active' : ''}`}
+                          style={active
+                            ? { borderColor: t.swatch[1], boxShadow: `0 0 0 3px ${t.swatch[0]}33, 0 0 14px ${t.swatch[1]}44` }
+                            : undefined}
+                          aria-pressed={active}
+                          onClick={() => applyCoupleTheme(id)}
+                        >
+                          <span
+                            className="couple-dot"
+                            style={{ background: `linear-gradient(135deg, ${t.swatch[0]}, ${t.swatch[1]})` }}
+                          />
+                          <span className="style-label">{t.emoji} {t.label}</span>
+                        </button>
+                      )
+                    })}
+                    <button className="style-chip couple-chip" onClick={applyCoupleReset}>
+                      <span className="style-emoji">🚪</span>
+                      <span className="style-label">解除</span>
+                    </button>
                   </div>
                 )}
                 <div className="wardrobe-row">
