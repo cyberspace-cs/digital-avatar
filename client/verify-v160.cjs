@@ -7,7 +7,8 @@ const puppeteer = require('puppeteer-core')
 const path = require('path')
 
 const SHOTS = path.join(__dirname, 'shots')
-const ORIGIN = 'http://localhost:4173/digital-avatar/'
+// ORIGIN 可参数化：本地 preview 或生产（ORIGIN=https://taoxie.vip/digital-avatar/ node verify-v160.cjs）
+const ORIGIN = process.env.ORIGIN ?? 'http://localhost:4173/digital-avatar/'
 const results = []
 const record = (id, ok, detail) => {
   results.push({ id, ok, detail })
@@ -37,11 +38,12 @@ const record = (id, ok, detail) => {
       errors.push('PAGEERROR: ' + stack.split('\n')[0].slice(0, 160))
       console.log(`PAGEERROR[${stack.split('\n').slice(0, 6).join(' | ')}]`)
     })
-    await page.goto(ORIGIN, { waitUntil: 'networkidle2', timeout: 30000 })
-    await new Promise((r) => setTimeout(r, 800))
+    await page.goto(ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60000 })
+    // 生产环境 socket.io 长轮询会让 networkidle2 永不空闲，统一用 domcontentloaded + 固定缓冲
+    await new Promise((r) => setTimeout(r, 2000))
     return page
   }
-  const waitModel = async (page, who = 'meS', timeout = 40) => {
+  const waitModel = async (page, who = 'meS', timeout = 120) => {
     for (let i = 0; i < timeout * 2; i++) {
       const ok = await page.evaluate((w) => {
         let u = null
@@ -55,7 +57,7 @@ const record = (id, ok, detail) => {
   }
   const onboard = async (page, name) => {
     await page.evaluate(() => localStorage.clear())
-    await page.reload({ waitUntil: 'networkidle2' })
+    await page.reload({ waitUntil: 'domcontentloaded' })
     await new Promise((r) => setTimeout(r, 800))
     await page.type('.onboard input', name)
     await page.click('.onboard button')
@@ -96,8 +98,18 @@ const record = (id, ok, detail) => {
   const serverLook = (page, uid) =>
     page.evaluate(async (u) => {
       const r = await (await fetch('/digital-avatar/api/state/' + u)).json()
-      return { style: r.style ?? 'default', outfit: r.outfit ?? 'base' }
+      return { avatar: r.avatar, style: r.style ?? 'default', outfit: r.outfit ?? 'base' }
     }, uid)
+  // 生产加载慢（swap 模型 + setLook 落库可达 30s+）：选形象后必须等服务端 avatar 落库，
+  // 否则后续 reload 打断 in-flight 请求 → 服务端性别判错 → 槽位分发错（T3/T4/T5/T8 假失败的根因）
+  const waitServerAvatar = async (page, uid, want, timeoutS = 90) => {
+    for (let i = 0; i < timeoutS * 2; i++) {
+      const r = await serverLook(page, uid)
+      if (r.avatar === want) return true
+      await new Promise((rl) => setTimeout(rl, 500))
+    }
+    return false
+  }
 
   // ============ 准备：A(Chitose 男) + B(Haru 女)，绑定 ============
   const ctxA = await mkCtx()
@@ -105,7 +117,7 @@ const record = (id, ok, detail) => {
   const A = await onboard(pa, '测试阿A')
   await openWardrobe(pa)
   await clickChip(pa, 'Chitose')
-  await new Promise((r) => setTimeout(r, 5000))
+  if (!(await waitServerAvatar(pa, A.id, 'chitose'))) throw new Error('A chitose settle failed')
   if (!(await waitModel(pa))) throw new Error('A chitose model failed')
 
   const ctxB = await mkCtx()
@@ -113,7 +125,7 @@ const record = (id, ok, detail) => {
   const B = await onboard(pb, '测试阿B')
   await openWardrobe(pb)
   await clickChip(pb, 'Haru')
-  await new Promise((r) => setTimeout(r, 5000))
+  if (!(await waitServerAvatar(pb, B.id, 'haru'))) throw new Error('B haru settle failed')
   if (!(await waitModel(pb))) throw new Error('B haru model failed')
 
   // 绑定：A 生成邀请码 → B 接受 → 双方 reload 让 getPartner 拉起
@@ -128,7 +140,7 @@ const record = (id, ok, detail) => {
       body: JSON.stringify({ userId: uid }),
     })).json()), code, B.id)
   console.log('BOND:', JSON.stringify({ code, partner: bondRes.partner?.id }))
-  await Promise.all([pa.reload({ waitUntil: 'networkidle2' }), pb.reload({ waitUntil: 'networkidle2' })])
+  await Promise.all([pa.reload({ waitUntil: 'domcontentloaded' }), pb.reload({ waitUntil: 'domcontentloaded' })])
   if (!(await waitModel(pa)) || !(await waitModel(pb))) throw new Error('reload models failed')
   await openWardrobe(pa)
   await openWardrobe(pb)
@@ -182,7 +194,7 @@ const record = (id, ok, detail) => {
   // ============ T6: 同性别组合（B 切 Natori 男模）→ 双子装都取 m 槽 ============
   await openWardrobe(pb)
   await clickChip(pb, 'Natori')
-  await new Promise((r) => setTimeout(r, 6000))
+  if (!(await waitServerAvatar(pb, B.id, 'natori'))) throw new Error('B natori settle failed')
   if (!(await waitModel(pb))) throw new Error('B natori model failed')
   // 换形象后款式回落 base（服务端也要回落）
   await until(pb, () => localStorage.getItem('da_outfit') === 'base')
@@ -208,10 +220,15 @@ const record = (id, ok, detail) => {
   const svB8 = await serverLook(pa, B.id)
   const pB2 = await mkPage(ctxB) // 同 context 新开页 = 同一身份的"重新上线"
   pb = pB2 // 后续测试改用新页面（旧 frame 已 detach）
-  await pB2.reload({ waitUntil: 'networkidle2' })
+  await pB2.reload({ waitUntil: 'domcontentloaded' })
   if (!(await waitModel(pB2))) throw new Error('T8 B model failed')
   const t8b = await until(pB2, () => localStorage.getItem('da_style') === 'charcoal', 15)
-  const badge8 = await pB2.evaluate(() => document.querySelector('.couple-badge')?.textContent ?? null)
+  // 徽章点亮依赖 B 端拉到 partner look（异步），必须轮询等，不能查一次就定生死
+  const badge8Ok = await until(pB2, () =>
+    (document.querySelector('.couple-badge')?.textContent ?? '').includes('暮樱'), 15)
+  const badge8 = badge8Ok
+    ? await pB2.evaluate(() => document.querySelector('.couple-badge')?.textContent ?? null)
+    : null
   record('T8_OFFLINE_HEAL', t8b && svB8.style === 'charcoal' && !!badge8 && badge8.includes('暮樱'),
     `B离线被换装 server=${JSON.stringify(svB8)} 重开后本地style=${(await lookOf(pB2)).style} badge=${JSON.stringify(badge8)}`)
   await openWardrobe(pB2)
