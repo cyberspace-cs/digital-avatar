@@ -25,6 +25,9 @@ export interface AvatarDef {
   path: string
   /** 性别（V1.5.0）：衣橱色板按此过滤（男模显示男色板，女模显示女色板） */
   gender: 'm' | 'f'
+  /** 半身像模型：官方 moc 无腿部部件（如 chitose 只有「体」无「下半身」），
+   * 按"胸像立绘"构图渲染（放大 + 截断边压出屏幕），避免"缺腿"观感 */
+  halfBody?: boolean
 }
 
 export const AVATAR_LIBRARY: AvatarDef[] = [
@@ -34,12 +37,17 @@ export const AVATAR_LIBRARY: AvatarDef[] = [
   // 两男：Natori 西装青年 / Chitose 温柔青年（官方 "male model"，棕发衬衫马甲；
   // V1.5.0 Mark 移除：卡通小孩形象 + 条款禁止改绘成美男，服务端已迁移 mark → chitose）
   { id: 'natori', label: 'Natori', tag: '西装青年', path: 'models/natori/Natori.model3.json', gender: 'm' },
-  { id: 'chitose', label: 'Chitose', tag: '温柔青年', path: 'models/chitose/chitose.model3.json', gender: 'm' },
+  { id: 'chitose', label: 'Chitose', tag: '温柔青年', path: 'models/chitose/chitose.model3.json', gender: 'm', halfBody: true },
 ]
 
 /** id → 性别（未知形象按女处理，仅影响色板过滤） */
 export const AVATAR_GENDER: Record<string, 'm' | 'f'> = Object.fromEntries(
   AVATAR_LIBRARY.map((a) => [a.id, a.gender]),
+)
+
+/** id → 是否半身像（V1.6.2：构图用，见 AvatarDef.halfBody 注释） */
+export const AVATAR_HALF_BODY: Record<string, boolean> = Object.fromEntries(
+  AVATAR_LIBRARY.filter((a) => a.halfBody).map((a) => [a.id, true]),
 )
 
 /** id → model3 完整 URL（带 base 前缀，生产部署在 /digital-avatar/ 子路径） */

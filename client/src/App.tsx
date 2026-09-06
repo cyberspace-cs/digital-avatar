@@ -3,7 +3,7 @@ import * as PIXI from 'pixi.js'
 import './pixi-setup'
 import { AvatarSprite, OUTFIT_STYLES, OUTFIT_VARIANTS } from './live2d/avatar'
 import { COUPLE_THEMES, COUPLE_THEME_ORDER, matchCoupleTheme } from './live2d/couple'
-import { AVATAR_LIBRARY, AVATAR_LABELS, AVATAR_GENDER, MODEL_URLS, DEFAULT_AVATAR } from './live2d/models'
+import { AVATAR_LIBRARY, AVATAR_LABELS, AVATAR_GENDER, AVATAR_HALF_BODY, MODEL_URLS, DEFAULT_AVATAR } from './live2d/models'
 import { PerfGovernor } from './live2d/perf'
 import type { QualityTier } from './live2d/perf'
 import { api } from './api'
@@ -13,6 +13,13 @@ import type { BondMeta, InteractionEvent, Mood, QuestItem, User, Visibility } fr
 
 // V1.3.2 形象库配置化：见 live2d/models.ts，新增形象只改 models.ts 一处
 const MODEL_SCALE = 0.12
+// V1.6.2 home y（缺腿根治）：全身像脚底贴 Dock 上沿（预留 96px）；
+// 半身像（chitose，官方 moc 无腿部）按胸像构图——截断边压出屏幕底 10%，只露头到腰，不再"缺腿"
+const homeYFor = (avatarKey: string, h: number) => {
+  const vh = window.innerHeight
+  if (AVATAR_HALF_BODY[avatarKey] && h > 0) return vh - h / 2 + h * 0.1
+  return Math.max(vh * 0.45, vh - 96 - h / 2)
+}
 // 形象按钮 emoji（衣橱芯片用）
 const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', haru: '📚', natori: '🌙', chitose: '🧥' }
 
@@ -121,6 +128,22 @@ export default function App() {
       return !v
     })
   }, [])
+
+  // V1.6.1 桌宠 idle 轮换（借鉴 Codex 桌宠/Miku 桌宠：空闲定时换待机动作，防"摆大字挂机"）；
+  // 退出桌宠或卸载时停表，避免后台空转
+  useEffect(() => {
+    if (petMode) {
+      meSprite.current?.startIdleLoop()
+      partnerSprite.current?.startIdleLoop()
+    } else {
+      meSprite.current?.stopIdleLoop()
+      partnerSprite.current?.stopIdleLoop()
+    }
+    return () => {
+      meSprite.current?.stopIdleLoop()
+      partnerSprite.current?.stopIdleLoop()
+    }
+  }, [petMode])
 
   // 对方 Live2D 模型懒加载器：未绑定用户不加载对方模型（省一半首屏带宽），绑定后才拉起
   const partnerLoaderRef = useRef<(() => void) | null>(null)
@@ -256,7 +279,7 @@ export default function App() {
       if (savedOutfit && savedOutfit !== 'base') meS.variant = savedOutfit
     } catch { /* 忽略坏数据 */ }
     meS.load(app.stage, MODEL_URLS[meAvatarRef.current] ?? MODEL_URLS[DEFAULT_AVATAR], MODEL_SCALE, tier).then(() => {
-      meS.setPosition(window.innerWidth * 0.32, window.innerHeight * 0.78)
+      meS.setPosition(window.innerWidth * 0.32, homeYFor(meAvatarRef.current, meS.model?.height ?? 0))
         ; (window as any).__stageReady = true
       setBooting(false)
     }).catch(() => setBooting(false))
@@ -277,7 +300,8 @@ export default function App() {
       const pOutfit = stateRef.current.partner?.outfit
       if (pOutfit && pOutfit !== 'base') partnerS.variant = pOutfit
       partnerS.load(app.stage, MODEL_URLS[pAvatar] ?? MODEL_URLS.natori, MODEL_SCALE, tier).then(() => {
-        partnerS.setPosition(window.innerWidth * 0.68, window.innerHeight * 0.78)
+        // 与自己同款 home 规则（全身贴 Dock / 半身压边）
+        partnerS.setPosition(window.innerWidth * 0.68, homeYFor(pAvatar, partnerS.model?.height ?? 0))
         // 加载完成时按当前状态决定可见性与表情（getPartner 可能早已返回，竞态兜底）
         partnerS.model!.visible = !!stateRef.current.partner
         const st = stateRef.current
@@ -405,7 +429,8 @@ export default function App() {
         pressTimer = null
       }
       model.x = Math.min(window.innerWidth - 60, Math.max(60, model.x + dx))
-      model.y = Math.min(window.innerHeight - 40, Math.max(120, model.y + dy))
+      // V1.6.2：底边 clamp 按"脚底不出屏"计算（半高动态取自模型），高模型拖到底也不会沉进 Dock 缺腿
+      model.y = Math.min(window.innerHeight - model.height / 2, Math.max(120, model.y + dy))
       // 同步 target/home：否则 tick() 的 lerp 会把模型往原位拉，拖拽像在跟自己较劲
       active.sprite.cancelReturn()
       active.sprite.target.x = model.x
@@ -768,12 +793,13 @@ export default function App() {
         await sprite
           .swap(app.stage, MODEL_URLS[prev], MODEL_SCALE, governorRef.current?.current ?? 'high')
           .catch(() => {})
-        sprite.setPosition(home.x, home.y)
+        sprite.setPosition(home.x, homeYFor(prev, sprite.model?.height ?? 0))
         sprite.setMood(stateRef.current.mood)
       }
       return false
     }
-    sprite.setPosition(home.x, home.y)
+    // V1.6.2：形象切换后按新模型的半身/全身规则重算 home y（旧 home 是上一个模型的构图）
+    sprite.setPosition(home.x, homeYFor(key, sprite.model?.height ?? 0))
     sprite.setMood(stateRef.current.mood)
     return true
   }
@@ -935,7 +961,7 @@ export default function App() {
       sprite
         .swap(app.stage, MODEL_URLS[look.avatar], MODEL_SCALE, governorRef.current?.current ?? 'high')
         .then(() => {
-          sprite.setPosition(home.x, home.y)
+          sprite.setPosition(home.x, homeYFor(look.avatar ?? partnerAvatarRef.current ?? 'natori', sprite.model?.height ?? 0))
           sprite.model!.visible = !!stateRef.current.partner
           const st = stateRef.current
           if (st.bond?.cold) sprite.setMood('low')
@@ -1080,6 +1106,12 @@ export default function App() {
           {/* V1.4.3 桌宠模式 UI：迷你互动坞 + 退出按钮（模型拖拽/点按/长按与常驻模式一致） */}
           {petMode && (
             <>
+              {/* V1.6.1 状态行（对标 Codex Pet Desk 状态显示）：桌宠模式一眼看到 TA 在不在、TA 的状态 */}
+              <div className="pet-status">
+                {partner
+                  ? <>💫 {partner.name}{partnerMood && partnerMood !== 'neutral' ? ` · ${MOOD_LABELS[partnerMood]}` : ' · 在线'}</>
+                  : <>🤝 还没绑定 TA（「把我的分身送给 TA」生成邀请）</>}
+              </div>
               <div className="pet-dock">
                 {DOCK.map((d) => (
                   <button key={d.id} className="dock-btn" onClick={() => sendAction(d.id)}>

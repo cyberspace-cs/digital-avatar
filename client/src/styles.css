@@ -993,10 +993,8 @@ body,
 }
 
 /* ---------- V1.4.3 桌宠模式 ---------- */
-/* 藏起 App 壳后，页面只剩透明的舞台 + 一只可拖拽的小人 + 迷你互动坞 */
-.space.petmode {
-  background: transparent;
-}
+/* 桌宠模式藏起 App 壳。背景不能透明（网页没有系统级透明窗，透明会露出白色 body），
+   沿用 .space 的深色渐变，营造"只剩一只小人"的沉浸感 */
 
 .pet-dock {
   position: fixed;
@@ -1015,6 +1013,27 @@ body,
 
 .pet-dock .dock-btn {
   padding: 4px 6px;
+}
+
+/* V1.6.1 桌宠状态行：Dock 上方一条迷你胶囊，一眼看到 TA 在不在/TA 的状态 */
+.pet-status {
+  position: fixed;
+  bottom: calc(74px + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: 86vw;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(10px);
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 .pet-dock .dock-emoji {
@@ -1043,59 +1062,4 @@ body,
 
 .pet-exit:active {
   transform: scale(0.92);
-}
-
-/* ---------- V1.6.0 情侣衣橱 ---------- */
-/* 一键情侣装 chips：双色渐变圆点 + 渐变描边，点亮时用主题色光晕 */
-.couple-row {
-  flex-wrap: wrap;
-}
-
-.couple-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.couple-chip .couple-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  flex: none;
-  box-shadow: 0 0 6px rgba(0, 0, 0, 0.35), inset 0 0 2px rgba(255, 255, 255, 0.4);
-}
-
-.couple-chip.active {
-  background: linear-gradient(135deg, var(--accent-soft), transparent);
-}
-
-/* 情侣徽章：火花卡 / 我的面板里的小胶囊 */
-.couple-badge {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 8px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  white-space: nowrap;
-  color: var(--text);
-  background: linear-gradient(135deg, rgba(255, 158, 196, 0.25), rgba(103, 232, 249, 0.25));
-  border: 1px solid var(--glass-border);
-  animation: coupleGlow 2.4s var(--ease) infinite alternate;
-}
-
-@keyframes coupleGlow {
-  from {
-    box-shadow: 0 0 4px rgba(255, 158, 196, 0.25);
-  }
-
-  to {
-    box-shadow: 0 0 14px rgba(103, 232, 249, 0.45);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .couple-badge {
-    animation: none;
-  }
 }

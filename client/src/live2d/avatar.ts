@@ -3,6 +3,7 @@ import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4'
 import type { Mood } from '../types'
 import { type QualityTier } from './perf'
 import { OUTFIT_STYLES, OUTFIT_VARIANTS, avatarIdFromUrl, recolorOutfitTextures, applyOutfitVariant } from './outfit'
+import { AVATAR_HALF_BODY } from './models'
 
 // Live2DFactory 在 cubism4 模块内导出（不挂 window / Live2DModel.constructor），
 // 这里动态 import 拿到模块命名空间，在运行时挂中间件。
@@ -381,6 +382,19 @@ export class AvatarSprite {
     console.info(`[load] Live2DModel.from done: ${avatarIdFromUrl(url)}`)
     this.model = model
     this.model.scale.set(scale)
+    // V1.6.2 身高归一（"高富帅"）：各模型原生画布尺寸差异极大（如 chitose ≈2500 单位高，
+    // 固定 0.12 只有 ~300px）。按视口高度直接换算绝对 scale 统一渲染：
+    // 全身模型 ~74% 视口高（脚底留 Dock 空间）；半身像模型 ~100% 视口高（胸像构图，
+    // 截断边由 App 压出屏幕）。测量失败时保底 MODEL_SCALE 原比例。
+    try {
+      const naturalH = this.model.height / scale
+      if (Number.isFinite(naturalH) && naturalH > 0) {
+        const target = AVATAR_HALF_BODY[avatarIdFromUrl(url)]
+          ? window.innerHeight
+          : window.innerHeight * 0.74
+        this.model.scale.set(target / naturalH)
+      }
+    } catch { /* 保底原生比例 */ }
     this.model.anchor.set(0.5, 0.5)
     this.model.interactive = true
     container.addChild(this.model)
@@ -597,6 +611,27 @@ export class AvatarSprite {
 
   /** App.tsx 向后兼容：play() 是 playAction 的别名 */
   play(action: string) { return this.playAction(action) }
+
+  /**
+   * 桌宠模式：空闲自动换姿势循环（借鉴 Codex 桌宠/Miku 桌宠的 idle 轮换——
+   * pixi-live2d-display 只会循环同一帧 Idle，多个待机动作的模型会"摆大字挂机"，
+   * 定时随机换 Idle 动作让桌宠保持活感）。页面隐藏时跳过（渲染已暂停，避免积压）。
+   */
+  private _idleTimer: ReturnType<typeof setInterval> | null = null
+  startIdleLoop(intervalMs = 12000) {
+    this.stopIdleLoop()
+    this._idleTimer = setInterval(() => {
+      if (!this.model || document.hidden) return
+      const internal = (this.model as any)?.internalModel
+      const defs = internal?.motionManager?.definitions?.['Idle']
+      const count = Array.isArray(defs) ? defs.length : 0
+      if (count > 1) this.model.motion('Idle', Math.floor(Math.random() * count), MotionPriority.NORMAL)
+    }, intervalMs)
+  }
+
+  stopIdleLoop() {
+    if (this._idleTimer) { clearInterval(this._idleTimer); this._idleTimer = null }
+  }
 
   walkTo(tx: number, ty: number) {
     this._returning = false
