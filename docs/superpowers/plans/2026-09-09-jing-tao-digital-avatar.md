@@ -34,11 +34,15 @@
 **Interfaces:**
 - Produces `InteractionEvent`, `SharedMoment`, `Memory`, `AvatarManifest`, `ActionCapability`, `ChoreographyDefinition`。
 
-- [ ] 写出 schema 失败测试：缺少 `eventId`、未知 major schema、无效 actionId 必须被拒绝。
-- [ ] 运行 `pnpm --filter shared test`，确认测试先失败。
-- [ ] 实现共享类型和运行时 schema 校验。
-- [ ] 运行 `pnpm --filter shared test`，确认通过。
-- [ ] 运行 `pnpm -r build`，确认客户端和服务端能消费 shared 包。
+- [x] 写出 schema 失败测试：缺少 `eventId`、未知 major schema、无效 actionId 必须被拒绝。
+- [x] 运行 `pnpm --filter shared test`，确认测试先失败。
+- [x] 实现共享类型和运行时 schema 校验。
+- [x] 运行 `pnpm --filter shared test`，确认通过。（40/40，2026-09-09）
+- [x] 运行 `pnpm -r build`，确认客户端和服务端能消费 shared 包。（shared ESM dist + server Node 冒烟 SERVER-CONSUME-OK；client 已声明 workspace 依赖，Task 3 真正 import）
+
+> Task 1 实施记录（2026-09-09）：Node 实际版本 v22.19.0（契约基线 24，按"实施时重新核验锁定"条款以 22 LTS 落地，pnpm 9.15.9）。
+> 包名 `@digital-avatar/shared`，零依赖自定义校验（契约允许"zod 或自定义"），NodeNext + 显式 `.js` 相对导入保证 server 原生 ESM 可消费；SchemaError 统一收敛于 `errors.ts`（跨模块 instanceof 一致）。
+> 注意：lockfile 曾因 client/puppeteer-core 漂移导致 `pnpm install` frozen 失败，需 `--no-frozen-lockfile`。
 
 ### Task 2: 服务端事件与回忆模块化
 
