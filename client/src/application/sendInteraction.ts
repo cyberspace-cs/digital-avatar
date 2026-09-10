@@ -42,6 +42,10 @@ export interface SendInteractionPorts {
 }
 
 export interface SendInteractionResult {
+  /** 本次事件 ID（REST 失败时供 outbox 入队，服务端按它幂等去重） */
+  eventId: string
+  /** 实际发送的线格式载荷（outbox 重放必须复用同一载荷） */
+  payload: Record<string, unknown>
   event: Record<string, unknown> | null
   /** 结算通道：ack = socket 回执；rest = 离线直接 REST；rest-after-timeout = ack 超时后兜底 */
   settledBy: 'ack' | 'rest' | 'rest-after-timeout'
@@ -59,16 +63,18 @@ export function createSendInteraction(ports: SendInteractionPorts): SendInteract
   /** eventId → resolve（socket 链路的 ack 等待者） */
   const waiters = new Map<string, (r: SendInteractionResult) => void>()
 
-  function restFallback(payload: Record<string, unknown>, settledBy: 'rest' | 'rest-after-timeout') {
+  function restFallback(payload: Record<string, unknown>, eventId: string, settledBy: 'rest' | 'rest-after-timeout') {
     return ports.restInteract(payload).then(
       (r): SendInteractionResult => ({
+        eventId,
+        payload,
         event: r.event ?? null,
         settledBy,
         duplicate: !!r.duplicate,
       }),
       (): SendInteractionResult => {
-        // REST 也失败（彻底断网）：事件返回 null，调用方决定是否进入 outbox（Task 8）
-        return { event: null, settledBy, duplicate: false }
+        // REST 也失败（彻底断网）：event=null + 带 eventId/payload，调用方据此进 outbox
+        return { eventId, payload, event: null, settledBy, duplicate: false }
       },
     )
   }
@@ -79,7 +85,7 @@ export function createSendInteraction(ports: SendInteractionPorts): SendInteract
 
     // 离线：直接 REST（不 emit，避免半开 socket 静默丢失）
     if (!ports.isSocketConnected()) {
-      return restFallback(payload, 'rest')
+      return restFallback(payload, eventId, 'rest')
     }
 
     // 在线：emit + 等 ack；超时 → REST 兜底（同 eventId，服务端幂等）
@@ -95,7 +101,7 @@ export function createSendInteraction(ports: SendInteractionPorts): SendInteract
       waiters.set(eventId, (r) => done(r))
       const timer = setTimeout(() => {
         waiters.delete(eventId)
-        restFallback(payload, 'rest-after-timeout').then(done)
+        restFallback(payload, eventId, 'rest-after-timeout').then(done)
       }, timeoutMs)
       ports.emit('interaction', payload)
     })
@@ -107,6 +113,8 @@ export function createSendInteraction(ports: SendInteractionPorts): SendInteract
     const waiter = waiters.get(id)
     if (!waiter) return
     waiter({
+      eventId: id,
+      payload: {},
       event: (ack?.event as Record<string, unknown> | undefined) ?? null,
       settledBy: 'ack',
       duplicate: !!ack?.duplicate,

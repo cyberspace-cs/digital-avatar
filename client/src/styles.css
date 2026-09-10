@@ -1283,3 +1283,96 @@ body,
   font-size: 12px;
   padding: 3px 12px;
 }
+
+/* ---------- V2.0 Task 8：引导占位 / 离线发件箱 / 舞台错误占位 ---------- */
+.boot-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: radial-gradient(ellipse at 30% 20%, var(--bg2), var(--bg1) 70%);
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.boot-orb {
+  font-size: 42px;
+  animation: breathe 2.2s var(--ease) infinite;
+}
+
+@keyframes breathe {
+
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+
+  50% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+}
+
+.boot-retry {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.outbox-pill {
+  position: fixed;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(var(--blur));
+  backdrop-filter: blur(var(--blur));
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: var(--shadow-lg);
+  animation: breathe 2.4s var(--ease) infinite;
+}
+
+.stage-error {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 6, 15, 0.55);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+.stage-error-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 300px;
+  text-align: center;
+  padding: 26px 22px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-strong);
+  box-shadow: var(--shadow-lg);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.stage-error-emoji {
+  font-size: 40px;
+}

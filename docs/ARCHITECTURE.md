@@ -108,12 +108,12 @@ Digital-avatar/
 
 ### 6.2 已落地（本分支）
 
-1. **PerfGovernor 自适应帧率治理**（`client/src/live2d/perf.ts`）
-   - 三档位：high=60fps/2x res、balanced=30fps/1x、saver=20fps/1x
-   - 每 4s 统计实际 FPS，低于档位目标 75% 自动降档；触屏设备默认 balanced 起步
+1. **PerfGovernor 自适应帧率治理**（`client/src/live2d/perf.ts`，纯策略见 `perf-policy.ts`）
+   - 三档位：high=60fps/2x res、balanced=30fps/1x、saver=15fps/1x（V2.0 Task 8 起保底档 20→15，弱设备双模型也能流畅待机）
+   - 每 4s 统计实际 FPS，低于档位目标 75% 自动降档；触屏设备默认 balanced 起步；已在 saver 不再降
    - `?perf=high|balanced|saver` 强制指定；`?fps=1` 显示调试 HUD；`localStorage.da_perf` 持久化
    - 实测（本地 dev，DPR 1.5 显示器）：high 档稳定 55-58fps 未降档；balanced 档 28fps
-2. **初始化参数优化**（`client/src/App.tsx`）：`antialias: false` + `resolution: min(dpr,2)` + `autoDensity: true` + `powerPreference: 'high-performance'`
+2. **初始化参数优化**（`client/src/AppStage.tsx`）：`antialias: false` + `resolution: min(dpr,2)` + `autoDensity: true` + `powerPreference: 'high-performance'`
 
 ### 6.3 第二阶段（手机端专项，已落地 V1.1.0-opt2）
 
@@ -243,4 +243,13 @@ Digital-avatar/
 - **保留并明确只读**：`bonds` 旧三列（`runLegacyAlters` 仍补列，保证老库行可读）+ `bond/legacy.js` 透传；红线"任何路径不再写入"由 `server/test/bond.routes.test.js` 守护（seed 旧值 → 互动 + 拥抱全流程后逐字节不变）
 - **新增流程**：首次互动/首次拥抱（里程碑幂等自动落）、纪念日（回忆页手动添加）、回忆删除（两步确认软删除）、解绑（我的页两步确认 → `POST /api/unbind` → 双端 `unbonded` 复位，回忆保留）
 - 互动后不再触发任何成长副作用；`interaction_ack` 仅回事件保存状态
+
+### 10.4 Task 8 性能、弱网与发布验收（2026-09-11）
+- **主 JS 分包**（`client/vite.config.ts` manualChunks + 动态 import）：引导包 `index` 仅 3.29KB（gzip 1.65KB），`react-vendor` 45.6KB gzip 预载；`live2d-vendor`（PIXI+pixi-live2d-display，175KB gzip）、`AppStage`（舞台）、`Admin`、`net-vendor` 全部按需 chunk。原 `App.tsx` 拆为薄引导层（Suspense + 失败重试，防 chunk CDN 抖动白屏）与 `AppStage.tsx`；角色模型包（models/* 二进制）本就运行时 URL 按需拉取
+- **弱网降级链闭环**（契约 §10）：Socket → 1.6s ack 超时 REST → 彻底断网进 `application/outbox.ts`（localStorage 持久化、eventId 入队幂等、队列上限 50 淘汰最旧、死信阈值 20）；socket `connect`/浏览器 `online`/回前台触发顺序回放，服务端按 eventId 幂等（duplicate 也视为送达出队）；顶栏「📶 N 条消息等待联网送达」可点手动重试
+- **资产加载失败三级兜底**：首选形象失败 → 自动回退内置默认模型（一次）→ 仍失败显示安全占位卡片（重试按钮，绝不白屏）；对方模型失败只提示不拖垮己方舞台，气泡/互动照常
+- **Service Worker v2.0.0**（`client/public/sw.js`）：模型/纹理 cache-first 不变；新增 `/assets/` JS/CSS stale-while-revalidate；导航请求网络优先、断网回退缓存应用壳（配合 outbox 实现断网可互动）
+- **帧率保底 15fps**：saver 档 20→15（`live2d/perf-policy.ts` 纯策略，10 项单测覆盖降档边界与初始档位解析）
+- **发布验收脚本**：`scripts/verify-avatar-contract.mjs`（node:test 4 项 + `--release` CLI 门禁，占位包一律阻断，正式资产全契约通过才退出 0）、`scripts/verify-offline-replay.mjs`（真实 HTTP+内存 SQLite 5 项：离线零落库/顺序回放/重放 duplicate/队列不污染/坏载荷不阻塞）
+- 验证矩阵：scripts 21 项 + client 107 项 + server 45 项全绿，tsc 零错误，`pnpm build` 分包成功
 
