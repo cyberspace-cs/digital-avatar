@@ -85,6 +85,9 @@ const ACTION_MOTIONS: Record<string, { group: string; index?: number }> = {
   // V1.2 小火人化：喂食/送花（复用 TapBody 动作，反馈由 App 层粒子+表情补足）
   feed: { group: 'TapBody', index: 2 },
   flower: { group: 'TapBody', index: 3 },
+  // V2.0 Task 4：idle 是动作注册表能力表里的真实 actionId（generic 降级的落点），
+  // 此前缺失会导致 play('idle') 意外落到 poke
+  idle: { group: 'Idle', index: 0 },
 }
 
 /** 状态 → 视觉规则（State 层）。Natori 用命名表情；Hiyori 无表情文件会静默跳过 */

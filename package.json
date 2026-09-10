@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"pnpm --filter server dev\" \"pnpm --filter client dev\"",
     "build": "pnpm --filter client build",
-    "start": "pnpm --filter server start"
+    "start": "pnpm --filter server start",
+    "test:scripts": "node --test scripts/"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

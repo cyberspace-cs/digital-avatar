@@ -9,17 +9,20 @@ import type { QualityTier } from './live2d/perf'
 import { api } from './api'
 import { connectSocket, emit, getSocket, isSocketConnected } from './socket'
 import Admin from './Admin'
+// V2.0 Task 3：动作注册表（降级链）+ 互动发送用例（socket → ack 超时 → REST 兜底）
+import { resolveAction, legacyCapabilities, actionLabel as labelOf, actionBubble, MENU_ACTIONS } from './actions/registry'
+import type { ActionPlan } from './actions/registry'
+import { createSendInteraction } from './application/sendInteraction'
+// V2.0 Task 4：舞台布局规则单一事实源（homeYFor 移植到 scene-coordinator）
+import { homeYFor as sceneHomeYFor } from './runtime/scene-coordinator'
 import type { BondMeta, InteractionEvent, Mood, QuestItem, User, Visibility } from './types'
 
 // V1.3.2 形象库配置化：见 live2d/models.ts，新增形象只改 models.ts 一处
 const MODEL_SCALE = 0.12
-// V1.6.2 home y（缺腿根治）：全身像脚底贴 Dock 上沿（预留 96px）；
-// 半身像（chitose，官方 moc 无腿部）按胸像构图——截断边压出屏幕底 10%，只露头到腰，不再"缺腿"
-const homeYFor = (avatarKey: string, h: number) => {
-  const vh = window.innerHeight
-  if (AVATAR_HALF_BODY[avatarKey] && h > 0) return vh - h / 2 + h * 0.1
-  return Math.max(vh * 0.45, vh - 96 - h / 2)
-}
+// V1.6.2 home y（缺腿根治）：V2.0 Task 4 起规则统一收敛到 runtime/scene-coordinator（单一事实源）
+// 全身像脚底贴 Dock 上沿（预留 96px）；半身像（chitose）按胸像构图——截断边压出屏幕底 10%
+const homeYFor = (avatarKey: string, h: number) =>
+  sceneHomeYFor(AVATAR_HALF_BODY[avatarKey] === true, h, window.innerHeight)
 // 形象按钮 emoji（衣橱芯片用）
 const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', haru: '📚', natori: '🌙', chitose: '🧥' }
 
@@ -38,16 +41,8 @@ const VIS_LABELS: Record<Visibility, string> = {
   'each-time': '每次选择',
   'discover-after': '互动后发现',
 }
-const ACTIONS = [
-  { id: 'poke', label: '戳一下' },
-  { id: 'pat', label: '摸摸头' },
-  { id: 'hug', label: '抱抱' },
-  { id: 'heart', label: '比心' },
-  { id: 'wave', label: '挥手' },
-  { id: 'pinch', label: '捏脸' },
-  { id: 'feed', label: '喂食' },
-  { id: 'flower', label: '送花' },
-]
+// 互动动作清单（长按菜单顺序）——标签/气泡文案统一在 actions/registry
+const ACTIONS = MENU_ACTIONS
 // 互动 Dock（V1.2 小火人化）
 const DOCK = [
   { id: 'feed', emoji: '🧁' },
@@ -153,8 +148,11 @@ export default function App() {
   const governorRef = useRef<PerfGovernor | null>(null)
 
   const stateRef = useRef({ mood, visibility, me, partner, partnerMood, bond })
-  // V1.4.3：等回执的互动（eventId → applyGrowth），interaction_ack 到达时结算并清理
-  const ackWaiters = useRef(new Map<string, (g: any) => void>())
+  // V2.0 Task 3：互动发送用例（socket → 1.6s ack 超时 → REST 幂等兜底）。
+  // eventId 生成/回执匹配/超时重发全部在用例内部，App 只消费结果做 UI 反馈
+  const interactor = useRef(
+    createSendInteraction({ emit, isSocketConnected, restInteract: api.interact }),
+  )
   stateRef.current = { mood, visibility, me, partner, partnerMood, bond }
 
   // V1.6.0 情侣徽章：双方 style/outfit 命中同一主题即点亮（纯客户端匹配，服务端零新列）
@@ -215,7 +213,7 @@ export default function App() {
           localStorage.setItem('da_me', JSON.stringify(nu))
           swapMyModel(r.avatar)
         }
-      }).catch(() => {})
+      }).catch(() => { })
       if (invite) {
         api.acceptInvite(invite, u.id).then((r) => {
           setToast(`收到 ${r.partner.name} 送你的数字分身！`)
@@ -311,8 +309,8 @@ export default function App() {
     }
     partnerLoaderRef.current = loadPartnerModel
 
-    // 自动化测试/调试探针（生产保留无害，仅供控制台检查舞台状态）
-    ;(window as any).__pixi = { app, meS, partnerS }
+      // 自动化测试/调试探针（生产保留无害，仅供控制台检查舞台状态）
+      ; (window as any).__pixi = { app, meS, partnerS }
 
     app.ticker.add(() => {
       meS.tick()
@@ -508,25 +506,28 @@ export default function App() {
     setTimeout(() => setHearts((h) => h.filter((i) => !items.includes(i))), 2600)
   }
 
-  // ---------- 发送互动 ----------
-  // 互动气泡文案（动作播不出来时也必有可见反馈；模型动作数量有限见 avatar.ts）
-  const ACTION_BUBBLES: Record<string, string> = {
-    poke: '戳戳你 👉',
-    pat: '摸摸头～',
-    hug: '抱抱！🤗',
-    heart: '比心 ❤️',
-    wave: '嗨嗨～ 👋',
-    pinch: '捏捏脸',
-    feed: '请你吃蛋糕 🧁',
-    flower: '送你花 💐',
+  // ---------- 发送互动（V2.0 Task 3 重构） ----------
+  // 动作语义与降级链在 actions/registry：旧模型能力表下 feed/flower 降级为 wave（与
+  // V1.2 行为一致），未知动作落通用反应（idle+表情），动画失败不阻断事件发送
+  const playPlanLocal = (sprite: AvatarSprite | null, plan: ActionPlan) => {
+    if (plan.level === 'exact' || plan.level === 'semantic') {
+      sprite?.play(plan.actionId)
+    } else if (plan.level === 'generic') {
+      if (!sprite) return
+      // 通用反应：表情闪现 happy，2.5s 后回到自己当前状态
+      sprite.setMood('happy')
+      window.setTimeout(() => sprite.setMood(stateRef.current.mood), 2500)
+    }
+    // neutral-bubble / event-only：本地无动画（气泡仍会显示，事件照常发送）
   }
+
   const sendAction = useCallback((action: string, message?: string) => {
     const cur = stateRef.current
     if (!cur.me) return
     // 本地反馈先行（未绑定点按钮也有动作反馈，而不是"点了没反应"）
-    meSprite.current?.play(action === 'feed' || action === 'flower' ? 'wave' : action)
+    playPlanLocal(meSprite.current, resolveAction(legacyCapabilities(), action))
     if (!message) {
-      setBubble({ who: 'me', text: ACTION_BUBBLES[action] ?? labelOf(action) })
+      setBubble({ who: 'me', text: actionBubble(action) })
       setTimeout(() => setBubble(null), 5000)
     }
     // 未绑定时给出明确引导
@@ -534,38 +535,19 @@ export default function App() {
       setToast('先把分身送给 TA，绑定后就能互动啦 🎁')
       return
     }
-    // V1.4.3 互动双链路：socket 实时播放为主，REST 幂等兜底。
-    // 之前只有 socket 一条路，WS 断线时互动静默丢失（没回应、火花也不涨）。
-    const eventId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    const payload = {
-      senderId: cur.me.id,
-      receiverId: cur.partner.id,
-      action,
-      message: message ?? null,
-      eventId,
-    }
-    let settled = false
-    const applyGrowth = (g: any) => {
-      if (!g?.bond || settled) return
-      settled = true
-      setBond(g.bond)
-      if (g.leveledUp) setToast(`🔥 火花升级！Lv.${g.bond.level} ${g.bond.levelName}`)
-      refreshQuests()
-    }
-    if (isSocketConnected()) {
-      emit('interaction', payload)
-      // 1.6s 内没等到服务端回执（WS 半开/断线）→ REST 兜底，eventId 保证不重复结算
-      setTimeout(() => {
-        if (settled) { ackWaiters.current.delete(eventId); return }
-        api.interact(payload)
-          .then((r) => applyGrowth(r.growth))
-          .catch(() => {})
-          .finally(() => ackWaiters.current.delete(eventId))
-      }, 1600)
-    } else {
-      api.interact(payload).then((r) => applyGrowth(r.growth)).catch(() => {})
-    }
-    ackWaiters.current.set(eventId, applyGrowth)
+    // V2.0 互动发送：socket 实时为主，ack 超时/离线自动 REST 兜底（eventId 幂等去重）
+    void interactor.current
+      .sendInteraction({
+        senderId: cur.me.id,
+        receiverId: cur.partner.id,
+        actionId: action,
+        message: message ?? null,
+      })
+      .then((r) => {
+        // 兼容旧服务端的 growth 回执（V2.0 服务端 growth 恒 null）
+        const g = r.growth as { bond?: BondMeta } | null | undefined
+        if (g?.bond) setBond(g.bond)
+      })
     const mS = meSprite.current
     if (mS) {
       if (action === 'heart' || action === 'hug') spawnHearts(mS.x, mS.y - 260, 4, '💛')
@@ -618,18 +600,21 @@ export default function App() {
       setTimeout(() => setBubble(null), 5000)
       return
     }
-    if (!sprite) return
-    // 互动后发现：如果自己（接收方）状态是 low，播放异常反应
+    // 气泡反馈不依赖模型就绪（对方模型还在加载时也必有可见反馈）；动作播放可跳过
     if (who === 'me' && cur.mood === 'low') {
-      sprite.playSadReaction()
-    } else {
-      sprite.play(ev.action)
-      setBubble({ who, text: ACTION_BUBBLES[ev.action] ?? labelOf(ev.action) })
-      setTimeout(() => setBubble(null), 5000)
-      if (ev.action === 'heart' || ev.action === 'hug') spawnHearts(sprite.x, sprite.y - 260, 6, '💛')
-      if (ev.action === 'feed') spawnHearts(sprite.x, sprite.y - 260, 5, '🧁')
-      if (ev.action === 'flower') spawnHearts(sprite.x, sprite.y - 260, 5, '💐')
+      // 互动后发现：如果自己（接收方）状态是 low，播放异常反应
+      sprite?.playSadReaction()
+      return
     }
+    setBubble({ who, text: actionBubble(ev.action) })
+    setTimeout(() => setBubble(null), 5000)
+    if (!sprite) return
+    // V2.0 Task 3：接收侧播放同样走动作注册表降级链（feed/flower→wave，未知动作→通用反应）
+    const plan = resolveAction(legacyCapabilities(), ev.action)
+    playPlanLocal(sprite, plan)
+    if (ev.action === 'heart' || ev.action === 'hug') spawnHearts(sprite.x, sprite.y - 260, 6, '💛')
+    if (ev.action === 'feed') spawnHearts(sprite.x, sprite.y - 260, 5, '🧁')
+    if (ev.action === 'flower') spawnHearts(sprite.x, sprite.y - 260, 5, '💐')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -637,7 +622,7 @@ export default function App() {
   const refreshQuests = useCallback(() => {
     const uid = stateRef.current.me?.id
     if (!uid) return
-    api.getQuests(uid).then((r) => setQuests(r.quests)).catch(() => {})
+    api.getQuests(uid).then((r) => setQuests(r.quests)).catch(() => { })
   }, [])
 
   useEffect(() => {
@@ -675,14 +660,8 @@ export default function App() {
         if (g.leveledUp) setToast(`🔥 火花升级！Lv.${g.bond.level} ${g.bond.levelName}`)
         refreshQuests()
       },
-      // V1.4.3：互动回执 → 结算对应互动并停止 REST 兜底计时
-      interaction_ack: (ev: any) => {
-        const waiter = ackWaiters.current.get(ev?.id)
-        if (waiter) {
-          ackWaiters.current.delete(ev.id)
-          waiter(ev.growth)
-        }
-      },
+      // V2.0 Task 3：互动回执转投发送用例（内部按 eventId 匹配等待者；超时已兜底的忽略）
+      interaction_ack: (ev: any) => interactor.current.handleAck(ev),
       // V1.6.0 情侣装：服务端权威结算后的双端应用。
       // 发起端也会收到回声 —— applyCoupleMemberSelf/swapPartnerLook 内部 _applied 判重，幂等零重载
       couple_applied: (p: any) => {
@@ -734,14 +713,14 @@ export default function App() {
         if (s) {
           s.style = stNow
           s.variant = ofNow
-          s.applyVariant(ofNow).catch(() => {})
-          s.applyStyle(stNow).catch(() => {})
+          s.applyVariant(ofNow).catch(() => { })
+          s.applyStyle(stNow).catch(() => { })
         }
       }
     })
     api.getEvents(me.id).then((r) => setEvents(r.events))
     // V1.2：拉取火花成长与每日任务
-    api.getBond(me.id).then((r) => setBond(r.bond)).catch(() => {})
+    api.getBond(me.id).then((r) => setBond(r.bond)).catch(() => { })
     refreshQuests()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me])
@@ -792,7 +771,7 @@ export default function App() {
       if (prev !== key && MODEL_URLS[prev]) {
         await sprite
           .swap(app.stage, MODEL_URLS[prev], MODEL_SCALE, governorRef.current?.current ?? 'high')
-          .catch(() => {})
+          .catch(() => { })
         sprite.setPosition(home.x, homeYFor(prev, sprite.model?.height ?? 0))
         sprite.setMood(stateRef.current.mood)
       }
@@ -816,7 +795,7 @@ export default function App() {
     const nu = { ...me, avatar: key }
     setMe(nu)
     localStorage.setItem('da_me', JSON.stringify(nu))
-    api.setLook(me.id, { avatar: key }).catch(() => {})
+    api.setLook(me.id, { avatar: key }).catch(() => { })
     emit('state_update', { userId: me.id, avatar: key })
     // V1.5.0：换形象后若当前穿搭色板不属于新形象的性别（如女款粉 → 男模），
     // 自动回落"原生"，避免 UI 里选不回已隐藏的女款
@@ -827,9 +806,9 @@ export default function App() {
     if (myOutfit !== 'base' && !OUTFIT_VARIANTS[key]?.some((v) => v.id === myOutfit)) {
       setMyOutfit('base')
       localStorage.setItem('da_outfit', 'base')
-      api.setLook(me.id, { outfit: 'base' }).catch(() => {})
+      api.setLook(me.id, { outfit: 'base' }).catch(() => { })
       emit('state_update', { userId: me.id, avatar: key, outfit: 'base' })
-      meSprite.current?.applyVariant('base').catch(() => {})
+      meSprite.current?.applyVariant('base').catch(() => { })
     }
     if (st?.gender && st.gender !== g) void applyStyleLocal('default')
     setToast(`已换上 ${AVATAR_LABELS[key] ?? key}`)
@@ -846,7 +825,7 @@ export default function App() {
     const label = OUTFIT_VARIANTS[me.avatar]?.find((v) => v.id === variantId)?.label ?? variantId
     setToast(variantId === 'base' ? '换回原款…' : `换款式：${label}…`)
     await meSprite.current?.applyVariant(variantId)
-    api.setLook(me.id, { outfit: variantId }).catch(() => {})
+    api.setLook(me.id, { outfit: variantId }).catch(() => { })
     emit('state_update', { userId: me.id, outfit: variantId })
     setToast(variantId === 'base' ? '已换回原款' : `已换上 ${label}`)
   }
@@ -860,7 +839,7 @@ export default function App() {
     setToast(styleId === 'default' ? '换回原生…' : `换装中：${label}…`)
     // applyStyle 内部保持位置/可见性/心情，重载完成即新配色生效
     await meSprite.current?.applyStyle(styleId)
-    api.setLook(me.id, { style: styleId }).catch(() => {})
+    api.setLook(me.id, { style: styleId }).catch(() => { })
     emit('state_update', { userId: me.id, style: styleId })
     setToast(styleId === 'default' ? '已换回原生' : `已换上 ${label}`)
   }
@@ -1355,8 +1334,8 @@ export default function App() {
                 <>
                   <div className="ctxmenu-title">给 {partner?.name}</div>
                   {ACTIONS.map((a) => (
-                    <button key={a.id} onClick={() => sendAction(a.id)}>
-                      {a.label}
+                    <button key={a} onClick={() => sendAction(a)}>
+                      {labelOf(a)}
                     </button>
                   ))}
                   <SayInput onSend={sendShortMessage} />
@@ -1430,10 +1409,6 @@ export default function App() {
       </button>
     </div>
   )
-}
-
-function labelOf(action: string) {
-  return ACTIONS.find((a) => a.id === action)?.label ?? action
 }
 
 /** 当前等级内的火花进度（0-100），满级显示 100 */

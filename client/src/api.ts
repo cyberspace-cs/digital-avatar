@@ -42,8 +42,10 @@ export const api = {
     req<{ quests: any[]; streak: number; lastActiveDay: string | null; cold: boolean }>(
       `/api/quests/${userId}`,
     ),
-  // ---------- V1.4.3 互动 REST 兜底：WS 断线时从这里落库 + 火花结算（幂等） ----------
-  interact: (payload: { senderId: string; receiverId: string; action: string; message?: string | null; eventId: string }) =>
+  // ---------- V1.4.3 互动 REST 兜底：WS 断线时从这里落库（幂等） ----------
+  // V2.0 Task 3：载荷形状由 domain/interaction.ts 的 toWirePayload 定义（契约 §7），
+  // 服务端 normalize + schema 校验，这里只管透传
+  interact: (payload: Record<string, unknown>) =>
     req<{ event: any | null; growth: any | null; duplicate?: boolean; error?: string }>('/api/interact', {
       method: 'POST',
       body: JSON.stringify(payload),

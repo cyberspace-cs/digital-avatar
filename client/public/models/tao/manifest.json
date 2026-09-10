@@ -1,0 +1,30 @@
+{
+  "avatarId": "tao",
+  "name": "Tao",
+  "engine": "cubism5",
+  "version": "0.0.0",
+  "model3Url": "tao.model3.json",
+  "placeholder": true,
+  "anchors": {
+    "head": { "x": 0.5, "y": 0.08 },
+    "hand.left": { "x": 0.18, "y": 0.45 },
+    "hand.right": { "x": 0.82, "y": 0.45 },
+    "foot.left": { "x": 0.35, "y": 1 },
+    "foot.right": { "x": 0.65, "y": 1 },
+    "heart": { "x": 0.5, "y": 0.35 },
+    "shoulder": { "x": 0.5, "y": 0.25 },
+    "hug.chest": { "x": 0.5, "y": 0.42 },
+    "root": { "x": 0.5, "y": 1 }
+  },
+  "capabilities": [
+    { "actionId": "idle", "motion": "motions/idle.motion3.json", "expression": "happy" },
+    { "actionId": "wave", "motion": "motions/wave.motion3.json", "expression": "happy", "degradesTo": ["idle"] },
+    { "actionId": "heart", "motion": "motions/heart.motion3.json", "expression": "happy", "degradesTo": ["wave", "idle"] },
+    { "actionId": "hug", "motion": "motions/hug_ready.motion3.json", "expression": "happy", "degradesTo": ["wave", "idle"] }
+  ],
+  "textures": {
+    "4096": "textures/tao.4096.png",
+    "2048": "textures/tao.2048.png",
+    "1024": "textures/tao.1024.png"
+  }
+}

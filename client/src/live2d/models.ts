@@ -60,3 +60,8 @@ export const AVATAR_LABELS: Record<string, string> = Object.fromEntries(
 )
 
 export const DEFAULT_AVATAR = 'hiyori'
+
+/** V2.0 Task 4：按 id 查形象定义（runtime/adapters 合成 legacy manifest 用） */
+export function avatarDef(id: string): AvatarDef | null {
+  return AVATAR_LIBRARY.find((a) => a.id === id) ?? null
+}
