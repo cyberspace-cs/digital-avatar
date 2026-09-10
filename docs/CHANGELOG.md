@@ -2,6 +2,30 @@
 
 > 约定：每次文档/功能迭代，在此追加一条记录；文档改动同时在 `versions/` 存一份带时间戳的不可变副本。
 
+## [V2.0.0-dev · Task 7] 2026-09-11（dev）—— 产品清理与数据迁移：火花/等级/任务下线，解绑与纪念日上线
+
+> Jing/Tao 数字分身重构（契约 `docs/superpowers/specs/2026-09-09-jing-tao-digital-avatar-contract.md`）的产品清理任务。核心决策：**旧增长数据只读取、永不写入**，新玩法全部围绕"共同回忆"而非数值养成。
+
+### 1. 删除清单（火花成长整套下线）
+- 服务端：`growth_events` 表不再创建、`updateBondGrowth/insertGrowthEvent/growthCountsOfDay/growthEventExists/eventsOfDayForBond` 预编译语句删除；`GET /api/quests` 端点、`LEVELS/QUESTS` 内联表、`cold` 计算全部移除；互动回执 `growth` 恒为 null（旧客户端兼容字段，不再有真实数值）
+- 客户端：`BondMeta` 收敛为 `{ id }`（id = relationshipId）；`QuestItem` 类型、`api.getQuests`、`growth_update` socket 监听、`bond.cold` 断联变灰 effect 与三处模型 mood 分支删除；`SendInteractionResult.growth` 链路字段删除（不再消费服务端 null 占位）
+- 旧库兼容：`bonds.growth/streak/last_active_day` 三列的幂等 ALTER 保留（老库行可读），读取逻辑收敛到新模块 `server/src/modules/bond/legacy.js`
+
+### 2. 新增能力
+- **解绑流程**：`POST /api/unbind`（[bond/routes.js](../server/src/modules/bond/routes.js)）删除 bond 并向双端在线连接广播 `unbonded`；我的页两步确认 UI，客户端本地同步复位（防 socket 断链推送丢失）；回忆按 relationshipId 保留，不级联删除
+- **纪念日**：回忆页「＋ 纪念日」表单（标题 + 可选日期），走 `POST /api/memories`（kind=anniversary），保存后即时入时间线；保存中禁用按钮防重复提交
+- **里程碑链路固化**：首次互动（events 服务 onSettled 钩子）、首次拥抱（SharedMoment completed → `first_hug`）均按 key 幂等，partial 落「差一点点」回忆、failed 不落
+
+### 3. 测试与验证
+- 新增 `server/test/bond.routes.test.js`（6 项）：旧库 seed 字段原样透传（321 火花→小火人 Lv.3）、互动+拥抱全流程后旧三列逐字节不变的"不写入红线"、解绑双端推送/幂等/未绑定三场景
+- `events.service.test.js` 红线断言改为：growth 恒 null + sqlite_master 中 growth_events 表不存在
+- 全量：服务端 45 项、客户端 85 项 vitest 全绿；`tsc --noEmit` 零错误；`pnpm build` 成功
+- 文档：ARCHITECTURE §8.2 加 V2.0 移除横幅、新增 §10（V2.0 模块架构 + Task 7 清理说明）；ACCEPTANCE 增 V7-1~V7-8 验收表
+
+### 4. 风险与注意
+- 生产旧库升级无迁移脚本：三列原地保留为只读，`growth_events` 旧表也原地保留（无人访问），不删数据
+- 仍运行旧版客户端的用户：等级/任务接口 404 后客户端本就有 catch 兜底；`GET /api/bond` 字段形状不变（仅少 `cold`），旧客户端 cold 读 undefined 表现为"未断联"，无崩溃风险
+
 ## [V1.6.2] 2026-09-06（master）—— 缺腿根治：身高归一 + 半身像构图
 
 > 用户反馈："温柔青年还是缺腿，而且身体不够大高，可以变高富帅点，继续改优化，部署"。
@@ -155,13 +179,13 @@
 - E2E 12 组截图目检：四形象换色正确、肤色/头发零改动
 
 ### 3. 互动无回应：四连根因（本轮核心）
-| # | 根因 | 层 | 修复 |
-| --- | --- | --- | --- |
-| ① | `getBond` SQL 两个 OR 分支参数相同，只认 `user_a=sender` 顺序——**B 发起互动永远查不到 bond，火花永不结算** | 服务端 [db.js](../server/src/db.js) | 四占位符双向传参 `(x,y,y,x)`，DB 取证：feed 事件落库但 growth_events 为空、bond growth=0 |
-| ② | REST `/api/interact` 结算后只返回 HTTP 响应，**不推给接收方**——发送端走兜底时对方永远看不到反应 | 服务端 [index.js](../server/src/index.js) | 结算后补推 `interaction` 给接收方 + `growth_update` 双端 |
-| ③ | polling→websocket 升级经代理 ECONNRESET，socket 半开（connected=true 但 emit 静默丢失） | 客户端 [socket.ts](../client/src/socket.ts) | 强制 `transports:['polling']` + `upgrade:false`；探针实证 polling 双连接+事件互通全通 |
-| ④ | socket 自回声（self）导致发送端动作/气泡双重播放 | 客户端 [App.tsx](../client/src/App.tsx) | `handleIncoming` 对 self 事件只记时间线不播放 |
-| 兜底 | WS 半开时互动静默丢失 | 双端 | 客户端互动生成 eventId，1.6s 无回执自动走 REST 幂等兜底（服务端按 events.id 去重，绝不重复结算） |
+| #    | 根因                                                                                                       | 层                                          | 修复                                                                                             |
+| ---- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| ①    | `getBond` SQL 两个 OR 分支参数相同，只认 `user_a=sender` 顺序——**B 发起互动永远查不到 bond，火花永不结算** | 服务端 [db.js](../server/src/db.js)         | 四占位符双向传参 `(x,y,y,x)`，DB 取证：feed 事件落库但 growth_events 为空、bond growth=0         |
+| ②    | REST `/api/interact` 结算后只返回 HTTP 响应，**不推给接收方**——发送端走兜底时对方永远看不到反应            | 服务端 [index.js](../server/src/index.js)   | 结算后补推 `interaction` 给接收方 + `growth_update` 双端                                         |
+| ③    | polling→websocket 升级经代理 ECONNRESET，socket 半开（connected=true 但 emit 静默丢失）                    | 客户端 [socket.ts](../client/src/socket.ts) | 强制 `transports:['polling']` + `upgrade:false`；探针实证 polling 双连接+事件互通全通            |
+| ④    | socket 自回声（self）导致发送端动作/气泡双重播放                                                           | 客户端 [App.tsx](../client/src/App.tsx)     | `handleIncoming` 对 self 事件只记时间线不播放                                                    |
+| 兜底 | WS 半开时互动静默丢失                                                                                      | 双端                                        | 客户端互动生成 eventId，1.6s 无回执自动走 REST 幂等兜底（服务端按 events.id 去重，绝不重复结算） |
 
 ### 4. 桌宠模式（[App.tsx](../client/src/App.tsx) + [styles.css](../client/src/styles.css)）
 - 「我的」页一键进入：藏起整个 App 壳（顶栏/Tab 栏），只剩可拖拽的小人 + 迷你互动坞（喂食/摸头/戳/抱/花）+ 🖥️ 退出按钮
@@ -432,14 +456,14 @@
 - **静态缓存头**：`assets/` 30天 immutable（hash 命名）、`models/` 7天、`index.html` no-cache（保新版即时生效）
 
 ### 效果（线上实测传输字节，Hiyori HD）
-| 资源 | 优化前 | 优化后 |
-| --- | --- | --- |
-| JS bundle | 866KB（未压） | **246KB**（gzip） |
-| Hiyori.moc3 | 444KB（未压） | **221KB**（gzip） |
-| motion JSON（单） | 25.8KB（未压） | **2.4KB**（gzip） |
-| texture_00 | 1.8MB PNG | **242KB** WebP |
-| texture_01 | 2.4MB PNG | **300KB** WebP |
-| **首屏关键合计** | **≈5.5MB** | **≈1.0MB（-82%）** |
+| 资源              | 优化前         | 优化后             |
+| ----------------- | -------------- | ------------------ |
+| JS bundle         | 866KB（未压）  | **246KB**（gzip）  |
+| Hiyori.moc3       | 444KB（未压）  | **221KB**（gzip）  |
+| motion JSON（单） | 25.8KB（未压） | **2.4KB**（gzip）  |
+| texture_00        | 1.8MB PNG      | **242KB** WebP     |
+| texture_01        | 2.4MB PNG      | **300KB** WebP     |
+| **首屏关键合计**  | **≈5.5MB**     | **≈1.0MB（-82%）** |
 
 移动端 SD 档纹理更小（两张 sd.webp 共约 212KB）；二次访问命中浏览器缓存近乎瞬开。
 

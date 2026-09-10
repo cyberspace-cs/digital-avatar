@@ -53,6 +53,8 @@ export function createMemoriesService({ q, uuid, logger = console }) {
       actionId: row.action_id,
       senderId: row.sender_id,
       receiverId: row.receiver_id,
+      // 契约对齐：shared.parseSharedMoment 要求 participants（恰好两人）；sender/receiver 保留兼容
+      participants: [row.sender_id, row.receiver_id],
       state: row.state,
       phaseMarkers: markers,
       createdAt: row.created_at,
@@ -115,6 +117,24 @@ export function createMemoriesService({ q, uuid, logger = console }) {
         logger.error('[memories] milestone persistence failed (moment persisted):', err?.message ?? err)
       }
     }
+    // 完成/部分完成都记入回忆时间线（kind=shared_moment，key=moment:<id> 幂等）；failed 不落
+    if (nextState === 'completed' || nextState === 'partial') {
+      try {
+        const label = LABELS[moment.actionId] ?? moment.actionId
+        statements.insertMemory.run(
+          uuid(),
+          moment.relationshipId,
+          'shared_moment',
+          `moment:${moment.momentId}`,
+          nextState === 'completed' ? `一起${label}` : `${label}（差一点点）`,
+          nextState === 'completed' ? null : '对方好像没接住，下次再来一次吧',
+          moment.momentId,
+          new Date().toISOString(),
+        )
+      } catch (err) {
+        logger.error('[memories] shared moment memory persistence failed (moment persisted):', err?.message ?? err)
+      }
+    }
     return { moment, error: null }
   }
 
@@ -144,7 +164,8 @@ export function createMemoriesService({ q, uuid, logger = console }) {
     return { ok: info.changes > 0, error: info.changes > 0 ? null : 'memory not found' }
   }
 
-  return { prepareSharedMoment, transitionMoment, createMemory, listMemories, softDeleteMemory, ensureMilestone }
+  // q 一并暴露：socket 层（memories/socket.js）要用 q.bondsOf 校验绑定关系
+  return { prepareSharedMoment, transitionMoment, createMemory, listMemories, softDeleteMemory, ensureMilestone, q }
 }
 
 export const LABELS = {

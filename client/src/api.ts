@@ -36,17 +36,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ userId, ...look }),
     }),
-  // ---------- V1.2 火花成长 ----------
+  // ---------- 绑定关系：bond.id = relationshipId（旧火花字段只读兼容，V2.0 只消费 id）----------
   getBond: (userId: string) => req<{ bond: any | null }>(`/api/bond/${userId}`),
-  getQuests: (userId: string) =>
-    req<{ quests: any[]; streak: number; lastActiveDay: string | null; cold: boolean }>(
-      `/api/quests/${userId}`,
-    ),
+  // V2.0 Task 7 解绑：删除绑定关系，双端收 unbonded 后回到未绑定态（回忆保留）
+  unbind: (userId: string) =>
+    req<{ ok: boolean; partnerId?: string; error?: string }>('/api/unbind', {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    }),
   // ---------- V1.4.3 互动 REST 兜底：WS 断线时从这里落库（幂等） ----------
   // V2.0 Task 3：载荷形状由 domain/interaction.ts 的 toWirePayload 定义（契约 §7），
   // 服务端 normalize + schema 校验，这里只管透传
   interact: (payload: Record<string, unknown>) =>
-    req<{ event: any | null; growth: any | null; duplicate?: boolean; error?: string }>('/api/interact', {
+    req<{ event: any | null; duplicate?: boolean; error?: string }>('/api/interact', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -56,4 +58,27 @@ export const api = {
       '/api/couple-outfit',
       { method: 'POST', body: JSON.stringify({ userId, themeId }) },
     ),
+  // ---------- V2.0 Task 6：双人共同时刻（服务端状态机权威）+ 回忆时间线 ----------
+  createMoment: (cmd: { relationshipId: string; choreographyId: string; actionId: string; senderId: string; receiverId: string }) =>
+    req<{ moment: any | null; error: string | null }>('/api/moments', {
+      method: 'POST',
+      body: JSON.stringify(cmd),
+    }),
+  transitionMoment: (
+    momentId: string,
+    body: { state: string; phaseMarkers?: Array<{ phase: string; at: string }> },
+  ) =>
+    req<{ moment: any | null; error: string | null }>(`/api/moments/${momentId}/transition`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  listMemories: (relationshipId: string) =>
+    req<{ memories: any[] }>(`/api/memories/${relationshipId}`),
+  createMemory: (body: { relationshipId: string; kind: string; title: string; description?: string; key?: string }) =>
+    req<{ memory: any | null; error: string | null }>('/api/memories', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  deleteMemory: (memoryId: string) =>
+    req<{ ok: boolean; error: string | null }>(`/api/memories/${memoryId}`, { method: 'DELETE' }),
 }

@@ -6,7 +6,7 @@
  * - 服务端是最终权威：serverOccurredAt/status 由服务端定
  * - 动画失败不影响事件保存：先落库，后副作用（推送/里程碑），副作用异常只记日志
  * - 未知动作不拒绝：格式合法即落库，语义降级由客户端动作注册表负责（禁止下标取模）
- * - 红线：本服务不写 growth/level/quest（旧字段只读兼容，读取见 index.js 的 bondMeta/levelOf）
+ * - 红线：本服务不写 growth/level/quest（旧字段只读兼容，读取见 modules/bond/legacy.js）
  *
  * 兼容：旧客户端载荷 {senderId, receiverId, action, message, eventId} 自动映射为统一事件格式。
  */

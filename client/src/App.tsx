@@ -13,9 +13,16 @@ import Admin from './Admin'
 import { resolveAction, legacyCapabilities, actionLabel as labelOf, actionBubble, MENU_ACTIONS } from './actions/registry'
 import type { ActionPlan } from './actions/registry'
 import { createSendInteraction } from './application/sendInteraction'
+// V2.0 Task 6：双人编排（服务端状态机 + 五阶段时间轴执行器）+ 回忆时间线
+import { createChoreography, CHOREOGRAPHY_ACTIONS } from './actions/choreographies'
+import type { ChoreographyPhase, ChoreographyPlan, ChoreographyState } from '@digital-avatar/shared'
+import { runChoreography } from './runtime/choreography-runner'
+import { LegacyPixiAdapter, legacyManifest } from './runtime/adapters/legacy-pixi'
+import { prepareSharedMoment, advanceMoment } from './application/sharedMoment'
+import MemoryTimeline from './features/memories/MemoryTimeline'
 // V2.0 Task 4：舞台布局规则单一事实源（homeYFor 移植到 scene-coordinator）
 import { homeYFor as sceneHomeYFor } from './runtime/scene-coordinator'
-import type { BondMeta, InteractionEvent, Mood, QuestItem, User, Visibility } from './types'
+import type { BondMeta, InteractionEvent, Mood, User, Visibility } from './types'
 
 // V1.3.2 形象库配置化：见 live2d/models.ts，新增形象只改 models.ts 一处
 const MODEL_SCALE = 0.12
@@ -27,7 +34,7 @@ const homeYFor = (avatarKey: string, h: number) =>
 const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', haru: '📚', natori: '🌙', chitose: '🧥' }
 
 type MenuPos = { x: number; y: number; target: 'me' | 'partner' } | null
-type Tab = 'companion' | 'quests' | 'records' | 'me'
+type Tab = 'companion' | 'memories' | 'records' | 'me'
 
 const MOOD_LABELS: Record<Mood, string> = {
   neutral: '普通',
@@ -51,19 +58,14 @@ const DOCK = [
   { id: 'hug', emoji: '🤗' },
   { id: 'flower', emoji: '💐' },
 ]
-// 火花等级（与服务端 LEVELS 阈值一致，仅用于进度条计算）
-const LEVELS = [
-  { level: 1, name: '火种', at: 0 },
-  { level: 2, name: '火苗', at: 100 },
-  { level: 3, name: '小火人', at: 300 },
-  { level: 4, name: '烈焰', at: 700 },
-  { level: 5, name: '燎原', at: 1500 },
-  { level: 6, name: '不灭', at: 3000 },
-  { level: 7, name: '永恒', at: 6000 },
-]
+// V2.0 Task 6：共同时刻应用层端口（REST 权威推进，非法转移由服务端拒绝）
+const momentPorts = { createMoment: api.createMoment, transitionMoment: api.transitionMoment }
+// 双人编排动作 emoji（长按菜单「双人时刻」区）
+const CHOREO_EMOJI: Record<string, string> = { hug: '🤗', handhold: '🤝', 'shoulder-lean': '🫂' }
+// V2.0 Task 6：任务页升级为回忆时间线（等级/任务 UI 移除，服务端只读兼容不动）
 const TABS: { id: Tab; emoji: string; label: string }[] = [
   { id: 'companion', emoji: '🏠', label: '陪伴' },
-  { id: 'quests', emoji: '🎯', label: '任务' },
+  { id: 'memories', emoji: '💛', label: '回忆' },
   { id: 'records', emoji: '💞', label: '记录' },
   { id: 'me', emoji: '⚙️', label: '我的' },
 ]
@@ -103,10 +105,11 @@ export default function App() {
   const [inviteLink, setInviteLink] = useState('')
   const [toast, setToast] = useState('')
   const [partnerMood, setPartnerMood] = useState<Mood | null>(null)
-  // V1.2 小火人化：Tab 壳 + 火花成长
+  // V2.0 Task 6：Tab 壳（任务页已升级为回忆时间线，火花/等级组件已移除）
   const [tab, setTab] = useState<Tab>('companion')
   const [bond, setBond] = useState<BondMeta | null>(null)
-  const [quests, setQuests] = useState<QuestItem[]>([])
+  // V2.0 Task 7 解绑：两步确认（第一步只把按钮换成确认组，误触不生效）
+  const [confirmUnbind, setConfirmUnbind] = useState(false)
   // V1.3 换装：自己的穿搭风格（形象跟 me.avatar 走）
   const [myStyle, setMyStyle] = useState('default')
   // V1.5.0 衣橱 2.0：自己的款式（'base' = 原生；款式属于形象，换形象时回落 base）
@@ -153,6 +156,14 @@ export default function App() {
   const interactor = useRef(
     createSendInteraction({ emit, isSocketConnected, restInteract: api.interact }),
   )
+  // V2.0 Task 6：双人编排会话（prepare 暂存 → start 执行；busy 防重入）
+  const stagedMomentRef = useRef<{
+    momentId: string
+    role: 'initiator' | 'receiver'
+    plan: ChoreographyPlan
+    contactGapPx: number
+  } | null>(null)
+  const choreoBusyRef = useRef(false)
   stateRef.current = { mood, visibility, me, partner, partnerMood, bond }
 
   // V1.6.0 情侣徽章：双方 style/outfit 命中同一主题即点亮（纯客户端匹配，服务端零新列）
@@ -302,9 +313,7 @@ export default function App() {
         partnerS.setPosition(window.innerWidth * 0.68, homeYFor(pAvatar, partnerS.model?.height ?? 0))
         // 加载完成时按当前状态决定可见性与表情（getPartner 可能早已返回，竞态兜底）
         partnerS.model!.visible = !!stateRef.current.partner
-        const st = stateRef.current
-        if (st.bond?.cold) partnerS.setMood('low')
-        else partnerS.setMood(st.partnerMood ?? 'neutral')
+        partnerS.setMood(stateRef.current.partnerMood ?? 'neutral')
       })
     }
     partnerLoaderRef.current = loadPartnerModel
@@ -347,10 +356,11 @@ export default function App() {
     let pressTimer: number | null = null
 
     const openMenuAt = (who: 'me' | 'partner', x: number, y: number) => {
-      // 菜单弹出坐标夹取在视口内（触屏点小人边缘时不至于被截断）
+      // 菜单弹出坐标夹取在视口内（触屏点小人边缘时不至于被截断）；
+      // V2.0 加了「双人时刻」分区，高度预算提到 460px
       setMenu({
         x: Math.min(Math.max(12, x), window.innerWidth - 200),
-        y: Math.min(Math.max(12, y), window.innerHeight - 320),
+        y: Math.min(Math.max(12, y), window.innerHeight - 460),
         target: who,
       })
     }
@@ -521,9 +531,160 @@ export default function App() {
     // neutral-bubble / event-only：本地无动画（气泡仍会显示，事件照常发送）
   }
 
+  // ---------- V2.0 Task 6：双人编排（服务端状态机权威，客户端只同步开始时间/阶段标记，禁止逐帧同步） ----------
+  /** 按序推进状态机；单步失败（网络/非法转移）不阻断后续——服务端是权威，重复推进幂等 */
+  const advanceThrough = async (momentId: string, states: ChoreographyState[]) => {
+    for (const s of states) {
+      try { await advanceMoment(momentPorts, momentId, s) } catch { /* 忽略，状态以服务端为准 */ }
+    }
+  }
+
+  /** 旧模型 → 渲染器端口（编排走位/动作都走端口，内部过动作注册表降级链） */
+  const adapterFor = (sprite: AvatarSprite | null, avatarKey: string | null): LegacyPixiAdapter | null => {
+    if (!sprite?.model) return null
+    const manifest = legacyManifest(avatarKey ?? DEFAULT_AVATAR) ?? legacyManifest(DEFAULT_AVATAR)
+    return manifest ? new LegacyPixiAdapter(sprite, manifest) : null
+  }
+
+  /** 发起双人编排：建 moment（requested）→ socket 广播 prepare → 两端 ready → 服务端 start */
+  const startChoreography = useCallback(async (actionId: string) => {
+    const cur = stateRef.current
+    if (!cur.me) return
+    setMenu(null)
+    if (!cur.partner) {
+      setToast('先把分身送给 TA，绑定后才有双人时刻 🤝')
+      return
+    }
+    if (choreoBusyRef.current) {
+      setToast('上一场双人时刻还在进行中')
+      return
+    }
+    const plan = createChoreography(actionId, [cur.me.id, cur.partner.id])
+    if (!plan) return
+    // 先占位再走 REST：防双击连点发起两个 moment（后续失败路径都要复位）
+    choreoBusyRef.current = true
+    // relationshipId = bond.id；bond 尚未拉到时现取一次（initiate 早于 getBond 返回的窗口）
+    let relId = cur.bond?.id ?? null
+    if (!relId) {
+      try {
+        const r = await api.getBond(cur.me.id)
+        if (r.bond) {
+          setBond(r.bond)
+          relId = r.bond.id
+        }
+      } catch { /* 忽略，下方兜底提示 */ }
+    }
+    if (!relId) {
+      choreoBusyRef.current = false
+      setToast('绑定信息还没就绪，稍后再试')
+      return
+    }
+    const created = await prepareSharedMoment(momentPorts, {
+      relationshipId: relId,
+      choreographyId: plan.choreographyId,
+      actionId,
+      senderId: cur.me.id,
+      receiverId: cur.partner.id,
+    })
+    if (!created.moment) {
+      choreoBusyRef.current = false
+      setToast('发起失败，请稍后重试')
+      return
+    }
+    // 服务端校验 bond 后向两端广播 moment.prepare（含发起端回声）；socket 断链时 prepare
+    // 不会回来 → 9s 后自动放行（状态机停在 requested 无副作用），避免永久卡死
+    emit('moment.prepare', {
+      momentId: created.moment.momentId,
+      choreographyId: plan.choreographyId,
+      actionId,
+      senderId: cur.me.id,
+      receiverId: cur.partner.id,
+    })
+    setTimeout(() => { choreoBusyRef.current = false }, 9000)
+    setToast(`${CHOREO_EMOJI[actionId] ?? '💫'} 等 TA 就绪，一起${labelOf(actionId)}…`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** moment.prepare：暂存编排 + 回报就绪；状态机由发起端权威推进（接收端不推，防双端竞争） */
+  const handleMomentPrepare = useCallback((p: any) => {
+    if (!p?.momentId) return
+    const cur = stateRef.current
+    if (!cur.me) return
+    if (p.senderId !== cur.me.id && p.receiverId !== cur.me.id) return
+    const role: 'initiator' | 'receiver' = p.senderId === cur.me.id ? 'initiator' : 'receiver'
+    const plan = createChoreography(p.actionId ?? 'hug', [p.senderId, p.receiverId])
+    if (!plan) return // 未知编排：不 ready → 服务端宽限后开跑 → 发起端单侧 partial（契约降级）
+    stagedMomentRef.current = {
+      momentId: p.momentId,
+      role,
+      plan,
+      contactGapPx: p.anchors?.contactGapPx ?? 120,
+    }
+    if (role === 'receiver') {
+      setToast(`${CHOREO_EMOJI[p.actionId] ?? '💫'} ${cur.partner?.name ?? 'TA'} 想和你${labelOf(plan.actionId)}`)
+    }
+    // 模型常驻无需装填，立即回报就绪；服务端集齐两端即提前开跑
+    emit('moment.ready', { momentId: p.momentId })
+    if (role === 'initiator') void advanceThrough(p.momentId, ['accepted', 'preparing', 'ready'])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** moment.start：两端按服务端 startAt 各自跑五阶段时间轴（不逐帧同步），发起端收尾落库 */
+  const handleMomentStart = useCallback((p: any) => {
+    const staged = stagedMomentRef.current
+    if (!staged || !p?.momentId || p.momentId !== staged.momentId) return
+    stagedMomentRef.current = null
+    const cur = stateRef.current
+    const mS = meSprite.current
+    if (!mS?.model) {
+      choreoBusyRef.current = false
+      return
+    }
+    const meAdapter = adapterFor(mS, meAvatarRef.current)
+    if (!meAdapter) {
+      choreoBusyRef.current = false
+      return
+    }
+    const partnerAdapter = adapterFor(cur.partner ? partnerSprite.current : null, partnerAvatarRef.current ?? cur.partner?.avatar ?? null)
+    const markers: Array<{ phase: ChoreographyPhase; at: string }> = []
+    const actionId = staged.plan.actionId
+    if (staged.role === 'initiator') void advanceThrough(staged.momentId, ['playing'])
+    void runChoreography({
+      role: staged.role,
+      plan: staged.plan,
+      startAt: typeof p.startAt === 'number' ? p.startAt : Date.now(),
+      me: meAdapter,
+      partner: partnerAdapter,
+      contactGapPx: staged.contactGapPx,
+      onPhase: (phase) => {
+        markers.push({ phase, at: new Date().toISOString() })
+        if (phase === 'contact') {
+          const px = partnerAdapter?.anchorPoint('root')?.x ?? mS.x
+          spawnHearts((mS.x + px) / 2, mS.y - 260, actionId === 'hug' ? 10 : 5, actionId === 'hug' ? '💛' : '✨')
+          setBubble({ who: 'me', text: actionBubble(actionId) })
+          setTimeout(() => setBubble(null), 4200)
+        }
+      },
+    }).then((res) => {
+      choreoBusyRef.current = false
+      // 发起端收尾：完成/部分完成连阶段标记一起落库（服务端据此写 shared_moment 回忆）
+      if (staged.role === 'initiator') {
+        void advanceMoment(momentPorts, staged.momentId, res.outcome === 'completed' ? 'completed' : 'partial', markers).catch(() => { })
+        if (res.outcome === 'completed') setToast(`💕 一起${labelOf(actionId)}啦！已记入回忆`)
+        else setToast('对方好像没接住，这次先记作「差一点点」')
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const sendAction = useCallback((action: string, message?: string) => {
     const cur = stateRef.current
     if (!cur.me) return
+    // V2.0 Task 6：hug 升级为双人编排（走位 + 双人动作 + 落回忆）；未绑定走原单人互动引导
+    if (action === 'hug' && cur.partner) {
+      void startChoreography('hug')
+      return
+    }
     // 本地反馈先行（未绑定点按钮也有动作反馈，而不是"点了没反应"）
     playPlanLocal(meSprite.current, resolveAction(legacyCapabilities(), action))
     if (!message) {
@@ -535,19 +696,14 @@ export default function App() {
       setToast('先把分身送给 TA，绑定后就能互动啦 🎁')
       return
     }
-    // V2.0 互动发送：socket 实时为主，ack 超时/离线自动 REST 兜底（eventId 幂等去重）
-    void interactor.current
-      .sendInteraction({
-        senderId: cur.me.id,
-        receiverId: cur.partner.id,
-        actionId: action,
-        message: message ?? null,
-      })
-      .then((r) => {
-        // 兼容旧服务端的 growth 回执（V2.0 服务端 growth 恒 null）
-        const g = r.growth as { bond?: BondMeta } | null | undefined
-        if (g?.bond) setBond(g.bond)
-      })
+    // V2.0 互动发送：socket 实时为主，ack 超时/离线自动 REST 兜底（eventId 幂等去重）；
+    // 结果只走事件/时间线（growth 回执已随火花系统移除）
+    void interactor.current.sendInteraction({
+      senderId: cur.me.id,
+      receiverId: cur.partner.id,
+      actionId: action,
+      message: message ?? null,
+    })
     const mS = meSprite.current
     if (mS) {
       if (action === 'heart' || action === 'hug') spawnHearts(mS.x, mS.y - 260, 4, '💛')
@@ -619,12 +775,6 @@ export default function App() {
   }, [])
 
   // ---------- Socket 生命周期 ----------
-  const refreshQuests = useCallback(() => {
-    const uid = stateRef.current.me?.id
-    if (!uid) return
-    api.getQuests(uid).then((r) => setQuests(r.quests)).catch(() => { })
-  }, [])
-
   useEffect(() => {
     if (!me) return
     connectSocket(me.id, {
@@ -635,7 +785,9 @@ export default function App() {
       bonded: (p: any) => {
         if (p?.partner) {
           setPartner(p.partner)
-          setToast(`已与 ${p.partner.name} 绑定，火花点燃 🔥`)
+          setToast(`已与 ${p.partner.name} 绑定 🤝`)
+          // 绑定即时拉取 relationshipId（回忆时间线/共同时刻要用），不等下次刷新
+          api.getBond(me.id).then((r) => setBond(r.bond)).catch(() => { })
         }
       },
       state_update: (s: any) => {
@@ -654,14 +806,26 @@ export default function App() {
           partnerSprite.current?.setMood('neutral')
         }
       },
-      // V1.2 火花成长：服务端结算后双端实时同步
-      growth_update: (g: any) => {
-        setBond(g.bond)
-        if (g.leveledUp) setToast(`🔥 火花升级！Lv.${g.bond.level} ${g.bond.levelName}`)
-        refreshQuests()
+      // V2.0 Task 7 解绑：任一端在「我的」页解绑后双端收到 —— 回到未绑定态（回忆保留在服务端）
+      unbonded: () => {
+        setPartner(null)
+        setBond(null)
+        setPartnerMood(null)
+        setPartnerOnline(false)
+        partnerSprite.current?.setMood('neutral')
+        if (partnerSprite.current?.model) partnerSprite.current.model.visible = false
+        setToast('已解绑。你们的回忆还留在回忆页里 💛')
       },
-      // V2.0 Task 3：互动回执转投发送用例（内部按 eventId 匹配等待者；超时已兜底的忽略）
+      // V2.0 Task 6：互动回执转投发送用例（内部按 eventId 匹配等待者；超时已兜底的忽略）
       interaction_ack: (ev: any) => interactor.current.handleAck(ev),
+      // V2.0 Task 6：双人编排同步（服务端只广播 prepare/start；时间轴执行在本地）
+      // 注意：这里的 key 是原始 socket 事件名（memories/socket.js emit 的点分名）
+      'moment.prepare': (p: any) => handleMomentPrepare(p),
+      'moment.start': (p: any) => handleMomentStart(p),
+      'moment.prepare_rejected': (p: any) => {
+        choreoBusyRef.current = false
+        setToast(p?.reason === 'not bonded' ? '双人时刻发起失败：绑定关系校验未通过' : '双人时刻发起失败')
+      },
       // V1.6.0 情侣装：服务端权威结算后的双端应用。
       // 发起端也会收到回声 —— applyCoupleMemberSelf/swapPartnerLook 内部 _applied 判重，幂等零重载
       couple_applied: (p: any) => {
@@ -719,27 +883,36 @@ export default function App() {
       }
     })
     api.getEvents(me.id).then((r) => setEvents(r.events))
-    // V1.2：拉取火花成长与每日任务
+    // 拉取 relationshipId（回忆时间线/共同时刻关联键；旧火花字段只读兼容，客户端不再消费）
     api.getBond(me.id).then((r) => setBond(r.bond)).catch(() => { })
-    refreshQuests()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me])
 
-  // ---------- 断联软惩罚：火花变灰时，仅对 neutral 的分身叠加沮丧表情 ----------
-  useEffect(() => {
-    if (!bond) return
-    if (bond.cold) {
-      if (mood === 'neutral') meSprite.current?.setMood('low')
-      if (!partnerMood || partnerMood === 'neutral') partnerSprite.current?.setMood('low')
-    } else {
-      // 复燃：恢复各自当前状态的表现
-      if (mood === 'neutral') meSprite.current?.setMood('neutral')
-      partnerSprite.current?.setMood(partnerMood ?? 'neutral')
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bond?.cold, mood, partnerMood])
-
   // ---------- 设置状态 ----------
+  // V2.0 Task 7 解绑：服务端删 bond 并向双端推 unbonded；这里同时做本地复位
+  // （socket 断链时推送可能丢，本地复位保证发起端 UI 一定回未绑定态）
+  const doUnbind = async () => {
+    const cur = stateRef.current
+    if (!cur.me) return
+    try {
+      const r = await api.unbind(cur.me.id)
+      if (r.ok) {
+        setPartner(null)
+        setBond(null)
+        setPartnerMood(null)
+        setPartnerOnline(false)
+        partnerSprite.current?.setMood('neutral')
+        if (partnerSprite.current?.model) partnerSprite.current.model.visible = false
+        setToast('已解绑。你们的回忆还留在回忆页里 💛')
+      } else {
+        setToast(r.error === 'no_bond' ? '你们还没有绑定哦' : '解绑失败，请稍后重试')
+      }
+    } catch {
+      setToast('解绑失败，请稍后重试')
+    }
+    setConfirmUnbind(false)
+  }
+
   const applyMood = async (m: Mood, v?: Visibility) => {
     if (!me) return
     const vis = v ?? visibility
@@ -942,9 +1115,7 @@ export default function App() {
         .then(() => {
           sprite.setPosition(home.x, homeYFor(look.avatar ?? partnerAvatarRef.current ?? 'natori', sprite.model?.height ?? 0))
           sprite.model!.visible = !!stateRef.current.partner
-          const st = stateRef.current
-          if (st.bond?.cold) sprite.setMood('low')
-          else sprite.setMood(st.partnerMood ?? 'neutral')
+          sprite.setMood(stateRef.current.partnerMood ?? 'neutral')
         })
         .catch((e) => console.error('[swap] 对方形象加载失败', e))
     } else if (look.outfit && look.outfit !== (sprite.variant ?? 'base')) {
@@ -1023,14 +1194,6 @@ export default function App() {
         <>
           {/* 首个模型加载中提示（渲染感知性能：让等待"可见"） */}
           {booting && <div className="loading-pill">✨ 分身登场中…</div>}
-          {/* 等级光晕：火花等级越高越亮，断联时熄灭 */}
-          {bond && !bond.cold && (
-            <div
-              className="spark-glow"
-              style={{ opacity: 0.25 + (bond.level / 7) * 0.55 }}
-              aria-hidden
-            />
-          )}
 
           {/* 顶栏（精简：状态设置收进「我的」Tab）；桌宠模式下整个壳都藏起来 */}
           {!petMode && (
@@ -1045,27 +1208,6 @@ export default function App() {
                 ) : (
                   <button className="btn ghost" onClick={makeInvite}>把我的分身送给 TA</button>
                 )}
-              </div>
-            </div>
-          )}
-
-          {/* 火花关系卡（陪伴 Tab） */}
-          {tab === 'companion' && !petMode && bond && (
-            <div className={`bond-card ${bond.cold ? 'cold' : ''}`}>
-              <div className="bond-row">
-                <span className="flame">{bond.cold ? '🕯️' : '🔥'}</span>
-                <span className="bond-title">火花 Lv.{bond.level} {bond.levelName}</span>
-                <span className="bond-streak">
-                  {bond.cold ? '火花休息中' : `连续 ${bond.streak} 天`}
-                </span>
-                {/* V1.6.0 情侣徽章：双方穿搭命中同一情侣主题时点亮 */}
-                {coupleBadge && <span className="couple-badge">✨ {coupleBadge.emoji} {coupleBadge.label}</span>}
-              </div>
-              <div className="spark-bar">
-                <div
-                  className="spark-fill"
-                  style={{ width: `${sparkPct(bond)}%` }}
-                />
               </div>
             </div>
           )}
@@ -1104,31 +1246,12 @@ export default function App() {
             </>
           )}
 
-          {/* 任务 Tab */}
-          {tab === 'quests' && !petMode && (
-            <div className="panel">
-              <div className={`panel-card remind ${bond?.cold ? 'cold' : ''}`}>
-                {bond?.cold
-                  ? '🕯️ 今天你们还没互动，火花休息中——互相任意互动 1 次即可复燃'
-                  : bond
-                    ? `🔥 火花正旺！已连续 ${bond.streak} 天，今天互动过了`
-                    : '🤝 绑定 TA 后开启每日任务和火花养成'}
-              </div>
-              {quests.map((q) => (
-                <div key={q.id} className={`panel-card quest ${q.rewarded ? 'rewarded' : ''}`}>
-                  <div className="quest-row">
-                    <span>{q.label}</span>
-                    <span className={q.rewarded ? 'ok' : q.done ? 'ready' : ''}>
-                      {q.rewarded ? `+${q.reward} ✓` : `${q.progress}/${q.target}`}
-                    </span>
-                  </div>
-                  <div className="quest-bar">
-                    <div style={{ width: `${(q.progress / q.target) * 100}%` }} />
-                  </div>
-                  <div className="quest-reward">完成 +{q.reward} 火花</div>
-                </div>
-              ))}
-            </div>
+          {/* V2.0 Task 6：回忆时间线（原任务页升级；里程碑/共同时刻/纪念日按天倒序，可删除） */}
+          {tab === 'memories' && !petMode && (
+            <MemoryTimeline
+              relationshipId={bond?.id ?? null}
+              onToast={setToast}
+            />
           )}
 
           {/* 记录 Tab */}
@@ -1165,12 +1288,31 @@ export default function App() {
                 <h3>{me.name}</h3>
                 <p className="sub">
                   {partner
-                    ? `与 ${partner.name} 已绑定 ❤${bond ? ` · 火花 Lv.${bond.level} ${bond.levelName}` : ''}`
+                    ? `与 ${partner.name} 已绑定 ❤`
                     : '还没有绑定 TA'}
                   {coupleBadge && (
                     <span className="couple-badge">✨ {coupleBadge.emoji} {coupleBadge.label}</span>
                   )}
                 </p>
+                {/* V2.0 Task 7 解绑流程：两步确认；成功后双端收 unbonded 回到未绑定态（回忆保留） */}
+                {partner && (
+                  <div className="unbind-row">
+                    {confirmUnbind ? (
+                      <>
+                        <span className="unbind-warn">解绑后需要重新邀请才能再绑定，确定？</span>
+                        <button
+                          className="btn danger"
+                          onClick={doUnbind}
+                        >确定解绑</button>
+                        <button className="btn ghost" onClick={() => setConfirmUnbind(false)}>再想想</button>
+                      </>
+                    ) : (
+                      <button className="btn ghost unbind-btn" onClick={() => setConfirmUnbind(true)}>
+                        解除绑定
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
               {/* V1.3.2 形象库（配置化）+ 穿搭风格，双端实时同步 */}
               <div className="panel-card">
@@ -1333,9 +1475,16 @@ export default function App() {
               {menu.target === 'partner' && (
                 <>
                   <div className="ctxmenu-title">给 {partner?.name}</div>
-                  {ACTIONS.map((a) => (
+                  {/* V2.0 Task 6：单人互动与双人编排分区（hug 归入双人时刻） */}
+                  {ACTIONS.filter((a) => !(CHOREOGRAPHY_ACTIONS as readonly string[]).includes(a)).map((a) => (
                     <button key={a} onClick={() => sendAction(a)}>
                       {labelOf(a)}
+                    </button>
+                  ))}
+                  <div className="ctxmenu-title">双人时刻</div>
+                  {CHOREOGRAPHY_ACTIONS.map((a) => (
+                    <button key={a} onClick={() => startChoreography(a)}>
+                      {CHOREO_EMOJI[a] ?? '💫'} {labelOf(a)}
                     </button>
                   ))}
                   <SayInput onSend={sendShortMessage} />
@@ -1409,14 +1558,6 @@ export default function App() {
       </button>
     </div>
   )
-}
-
-/** 当前等级内的火花进度（0-100），满级显示 100 */
-function sparkPct(b: BondMeta) {
-  if (b.nextLevelAt == null) return 100
-  const curAt = LEVELS.find((l) => l.level === b.level)?.at ?? 0
-  const span = b.nextLevelAt - curAt
-  return Math.min(100, Math.max(3, Math.round(((b.growth - curAt) / span) * 100)))
 }
 
 /** SQLite 的 localtime 格式 "YYYY-MM-DD HH:MM:SS" 需转成可解析格式 */

@@ -88,8 +88,9 @@ describe('events service — settleInteraction', () => {
     expect(out.growth).toBeNull()
     const bond = q.getBond.get('u1', 'u2', 'u2', 'u1')
     expect(bond.growth).toBe(0)
-    const growthRows = q.db.prepare('SELECT COUNT(*) AS n FROM growth_events').get()
-    expect(growthRows.n).toBe(0)
+    // V2.0 Task 7：growth_events 表已随火花系统移除，互动不再产生任何成长流水
+    const tables = q.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='growth_events'").all()
+    expect(tables).toHaveLength(0)
   })
 
   it('旧客户端载荷兼容：{action, message} 自动映射为统一事件', () => {

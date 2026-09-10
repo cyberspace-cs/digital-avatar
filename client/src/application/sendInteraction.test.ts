@@ -13,7 +13,7 @@ afterEach(() => {
 
 function makePorts(over: Partial<SendInteractionPorts> = {}) {
   const emit = vi.fn()
-  const restInteract = vi.fn().mockResolvedValue({ event: { id: 'evt-x' }, growth: null, duplicate: false })
+  const restInteract = vi.fn().mockResolvedValue({ event: { id: 'evt-x' }, duplicate: false })
   const ports: SendInteractionPorts = { emit, isSocketConnected: () => true, restInteract, ...over }
   return { ports, emit, restInteract }
 }
@@ -98,7 +98,7 @@ describe('sendInteraction — 离线/失败路径', () => {
   it('REST duplicate 标记透传（重连重发场景）', async () => {
     const { ports } = makePorts({
       isSocketConnected: () => false,
-      restInteract: vi.fn().mockResolvedValue({ event: { id: 'evt-6' }, growth: null, duplicate: true }),
+      restInteract: vi.fn().mockResolvedValue({ event: { id: 'evt-6' }, duplicate: true }),
     })
     const h = createSendInteraction(ports)
     const r = await h.sendInteraction({ ...CMD, eventId: 'evt-6' })

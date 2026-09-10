@@ -15,7 +15,6 @@ import { newEventId, toWirePayload, type SendInteractionCommand } from '../domai
 /** REST /api/interact 的响应形状（旧格式行 + duplicate 标记） */
 export interface RestInteractResponse {
   event: Record<string, unknown> | null
-  growth: unknown
   duplicate?: boolean
   error?: string
   issues?: string[]
@@ -25,7 +24,6 @@ export interface AckPayload {
   id?: string
   eventId?: string
   duplicate?: boolean
-  growth?: unknown
   event?: Record<string, unknown>
   [k: string]: unknown
 }
@@ -48,7 +46,6 @@ export interface SendInteractionResult {
   /** 结算通道：ack = socket 回执；rest = 离线直接 REST；rest-after-timeout = ack 超时后兜底 */
   settledBy: 'ack' | 'rest' | 'rest-after-timeout'
   duplicate: boolean
-  growth: unknown
 }
 
 export interface SendInteractionHandle {
@@ -68,11 +65,10 @@ export function createSendInteraction(ports: SendInteractionPorts): SendInteract
         event: r.event ?? null,
         settledBy,
         duplicate: !!r.duplicate,
-        growth: r.growth ?? null,
       }),
       (): SendInteractionResult => {
         // REST 也失败（彻底断网）：事件返回 null，调用方决定是否进入 outbox（Task 8）
-        return { event: null, settledBy, duplicate: false, growth: null }
+        return { event: null, settledBy, duplicate: false }
       },
     )
   }
@@ -114,7 +110,6 @@ export function createSendInteraction(ports: SendInteractionPorts): SendInteract
       event: (ack?.event as Record<string, unknown> | undefined) ?? null,
       settledBy: 'ack',
       duplicate: !!ack?.duplicate,
-      growth: ack?.growth ?? null,
     })
   }
 

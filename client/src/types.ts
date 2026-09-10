@@ -30,23 +30,12 @@ export interface UserState {
   updatedAt: string
 }
 
-/** 火花成长（V1.2 小火人化） */
+/**
+ * 绑定元信息（V2.0 Task 7 起只消费 id = relationshipId）。
+ * 服务端仍只读透传旧火花字段（growth/streak/level 等），V2.0 客户端不再使用：
+ * 火花/等级/任务/连续天数组件已随产品清理移除，任何路径不再写入。
+ */
 export interface BondMeta {
-  growth: number
-  streak: number
-  lastActiveDay: string | null
-  cold: boolean
-  level: number
-  levelName: string
-  nextLevelAt: number | null
-}
-
-export interface QuestItem {
+  /** relationshipId：回忆时间线 / 共同时刻的关联键 */
   id: string
-  label: string
-  target: number
-  reward: number
-  progress: number
-  done: boolean
-  rewarded: boolean
 }

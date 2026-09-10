@@ -7,6 +7,9 @@ import { createEventsService } from './modules/events/service.js'
 import { createMemoriesService } from './modules/memories/service.js'
 import { createEventsRoutes } from './modules/events/routes.js'
 import { registerEventSockets } from './modules/events/socket.js'
+import { registerMomentSockets } from './modules/memories/socket.js'
+// 绑定关系路由（V2.0 Task 7）：旧火花字段只读兼容 + 解绑流程
+import { createBondRoutes } from './modules/bond/routes.js'
 
 const app = express()
 app.use(cors())
@@ -156,77 +159,19 @@ app.post('/api/couple-outfit', (req, res) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
 
-// ---------- 火花/等级/任务：V2.0 起只读兼容（红线：任何路径不再写入） ----------
-const LEVELS = [
-  { level: 1, name: '火种', at: 0 },
-  { level: 2, name: '火苗', at: 100 },
-  { level: 3, name: '小火人', at: 300 },
-  { level: 4, name: '烈焰', at: 700 },
-  { level: 5, name: '燎原', at: 1500 },
-  { level: 6, name: '不灭', at: 3000 },
-  { level: 7, name: '永恒', at: 6000 },
-]
-const QUESTS = [
-  { id: 'interact5', label: '互相互动 5 次', target: 5, reward: 10 },
-  { id: 'saymsg', label: '说一句话', target: 1, reward: 10 },
-  { id: 'feed1', label: '给 TA 喂一次食', target: 1, reward: 10 },
-]
-
-const todayStr = () => new Date().toLocaleDateString('sv-SE')
-
-function levelOf(growth) {
-  let cur = LEVELS[0]
-  let next = null
-  for (const l of LEVELS) {
-    if (growth >= l.at) cur = l
-    else { next = l; break }
-  }
-  return { level: cur.level, levelName: cur.name, nextLevelAt: next ? next.at : null }
-}
-
-function bondMeta(bond) {
-  return {
-    growth: bond.growth ?? 0,
-    streak: bond.streak ?? 0,
-    lastActiveDay: bond.last_active_day ?? null,
-    cold: !bond.last_active_day || bond.last_active_day < todayStr(),
-    ...levelOf(bond.growth ?? 0),
-  }
-}
-
-// 旧客户端兼容读取（只读）：等级元信息
-app.get('/api/bond/:userId', (req, res) => {
-  const bond = q.bondsOf.get(req.params.userId, req.params.userId)
-  if (!bond) return res.json({ bond: null })
-  res.json({ bond: bondMeta(bond) })
-})
-
-// 旧客户端兼容读取（只读）：任务进度（无奖励发放，仅展示历史进度）
-app.get('/api/quests/:userId', (req, res) => {
-  const bond = q.bondsOf.get(req.params.userId, req.params.userId)
-  if (!bond) return res.json({ quests: [], streak: 0, lastActiveDay: null, cold: true })
-  const day = todayStr()
-  const rows = q.eventsOfDayForBond.all(
-    `${day} 00:00:00`, bond.user_a, bond.user_b, bond.user_b, bond.user_a,
-  )
-  const counts = {
-    interact5: rows.length,
-    saymsg: rows.filter((r) => r.message).length,
-    feed1: rows.filter((r) => r.action === 'feed').length,
-  }
-  const quests = QUESTS.map((t) => {
-    const progress = Math.min(counts[t.id] ?? 0, t.target)
-    return { id: t.id, label: t.label, target: t.target, reward: t.reward, progress, done: progress >= t.target, rewarded: false }
-  })
-  res.json({ quests, streak: bond.streak ?? 0, lastActiveDay: bond.last_active_day, cold: bond.last_active_day !== day })
-})
+// ---------- 绑定关系（V2.0 Task 7）：旧火花字段只读兼容 + 解绑流程 ----------
+// 旧火花/等级/任务已删除：growth/streak/last_active_day 只读透传（不再有任何写入路径），
+// 任务端点 /api/quests 移除；成长写入语句与 growth_events 表一并清理（见 db.js）
 
 // ---------- V2.0 事件与回忆端点（REST 兜底 /api/interact、moments、memories） ----------
 // io 必须先于路由工厂创建（工厂解构 { io }，先挂载会触发 TDZ ReferenceError）
 const server = http.createServer(app)
 const io = new Server(server, { cors: { origin: '*' } })
+app.use(createBondRoutes({ q, online, io }))
 app.use(createEventsRoutes({ service, memories, online, io }))
 registerEventSockets(io, online, service)
+// V2.0 Task 6：双人编排 socket 同步（moment.prepare/ready/start，服务端只同步时间与状态）
+registerMomentSockets(io, online, memories)
 
 const PORT = process.env.PORT || 8090
 server.listen(PORT, () => console.log(`[digital-avatar] server on :${PORT}`))

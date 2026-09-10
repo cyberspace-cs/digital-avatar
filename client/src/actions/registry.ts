@@ -70,6 +70,9 @@ export const ACTION_LABELS: Record<string, string> = {
   flower: '送花',
   kiss: '亲亲',
   flick: '弹脑门',
+  // V2.0 Task 6：双人编排动作（走位 + 双人动作，非单人互动）
+  handhold: '牵手',
+  'shoulder-lean': '靠肩',
   idle: '待机',
   positive: '开心反应',
   affection: '亲密反应',
@@ -87,6 +90,8 @@ export const ACTION_BUBBLES: Record<string, string> = {
   feed: '请你吃蛋糕 🧁',
   flower: '送你花 💐',
   kiss: '么么哒 😚',
+  handhold: '牵住你的手 🤝',
+  'shoulder-lean': '靠靠你 🫂',
 }
 
 /** 互动菜单（Dock/长按菜单共用顺序） */

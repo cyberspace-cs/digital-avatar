@@ -147,25 +147,31 @@ Digital-avatar/
 
 ## 7. 已识别风险
 
-| 风险                                 | 对策                                                                     |
-| ------------------------------------ | ------------------------------------------------------------------------ |
-| 双人拥抱需两模型同屏                 | 同一 Pixi Application stage 加两个 Live2DModel，独立控制位置/缩放/zIndex |
-| 状态"互动后发现"需拦截默认反应       | 事件处理时先查 receiver 当前状态，命中规则则替换反应脚本                 |
-| Cubism Core 不可再分发               | 仅本地开发使用 + 服务器部署时单独 scp，不进公开仓库（.gitignore）        |
-| pixi-live2d-display 与 Pixi 版本耦合 | 锁定 pixi@6.5.10 + pixi-live2d-display@0.4.0                             |
+| 风险                                 | 对策                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| 双人拥抱需两模型同屏                 | 同一 Pixi Application stage 加两个 Live2DModel，独立控制位置/缩放/zIndex  |
+| 状态"互动后发现"需拦截默认反应       | 事件处理时先查 receiver 当前状态，命中规则则替换反应脚本                  |
+| Cubism Core 不可再分发               | 仅本地开发使用 + 服务器部署时单独 scp，不进公开仓库（.gitignore）         |
+| pixi-live2d-display 与 Pixi 版本耦合 | 锁定 pixi@6.5.10 + pixi-live2d-display@0.4.0                              |
 | Blob URL 生命周期泄漏                | `AvatarSprite.destroy()` 遍历 `this._blobUrls` 统一 `URL.revokeObjectURL` |
-| Worker 中间件栈内存泄漏              | settingsBlobMap 使用 WeakMap，实例销毁后自动 GC                          |
+| Worker 中间件栈内存泄漏              | settingsBlobMap 使用 WeakMap，实例销毁后自动 GC                           |
 
 ## 8. 小火人化：App 壳 + 火花成长体系（V1.2，2026-09-04）
 
 > 参考"抖音小火人"玩法，把应用从网页工具升级为高互动陪伴 App。设计 spec：`docs/superpowers/specs/2026-09-04-xiaohuoren-gamification-design.md`
 
 ### 8.1 App 壳（前端形态）
-- 底部 4 Tab：🏠陪伴（Live2D 舞台 + 关系卡 + 互动 Dock）/ 🎯任务 / 💞记录 / ⚙️我的
+- 底部 4 Tab：🏠陪伴（Live2D 舞台 + 关系卡 + 互动 Dock）/ 💛回忆（V2.0 起替换原 🎯任务）/ 💞记录 / ⚙️我的
 - **Pixi 舞台常驻不卸载**：切 Tab 仅用面板覆盖（`position:fixed` + z-index），避免 Live2D 模型重复加载开销
 - **PWA**：`client/public/manifest.json` + SVG 图标 + `viewport-fit=cover` / `theme-color`——手机"添加到主屏幕"后 standalone 全屏启动
 
 ### 8.2 火花成长体系（服务端权威，防刷）
+
+> ⚠️ **V2.0 已移除（2026-09-11，Task 7 产品清理）**：火花/等级/任务/连续天数/奖励整套玩法下线。
+> 旧库 `bonds.growth/streak/last_active_day` 列保留但**只读**（`modules/bond/legacy.js` 透传，供旧客户端兼容），
+> `growth_events` 表与全部写入语句已删除，`GET /api/quests`、`growth_update` socket 事件、`cold` 断联表现一并移除。
+> 替代品：回忆时间线 + 里程碑（首次互动/首次拥抱）+ 双人共同时刻（见 §10）。以下内容仅作历史存档。
+
 - **数据模型**（`server/src/db.js`，幂等迁移 try/catch）：
   - `bonds` 加列 `growth / streak / last_active_day`
   - 新表 `growth_events(id, bond_id, delta, reason, day, created_at)` + 索引 `(bond_id, day)`；`quest:<id>:<day>` 形式的 reason 兼作任务判重幂等键
@@ -214,3 +220,27 @@ Digital-avatar/
 ### 9.4 加载性能（V1.3.1）
 - **Service Worker**（`client/public/sw.js`，仅生产注册）：`models/assets/live2d` 同源 GET cache-first（缓存版本 `da-cache-v1.3.2`，发版递增失效）；API/Socket/导航一律直连；二次进入模型零网络等待
 - **感知性能**：首模型加载「✨ 分身登场中…」悬浮提示（`booting` 状态）；换形象先 toast「换装中…」再播成功提示
+
+## 10. Jing/Tao 数字分身重构（V2.0，进行中 2026-09-10 起）
+
+> 总契约：`docs/superpowers/specs/2026-09-09-jing-tao-digital-avatar-contract.md`；任务分解：`docs/superpowers/specs/trae-code-implementation-prompt.md`。
+> 已落地：Task 2/3（模块化事件结算 + 动作注册表降级链 + 发送用例）、Task 4/5（渲染器端口 + 舞台协调器 + 资产校验器）、Task 6（双人编排 + 回忆时间线）、Task 7（产品清理与数据迁移，2026-09-11）。
+
+### 10.1 服务端模块化（`server/src/modules/`）
+- `events/`：统一互动事件结算。Socket 与 REST 接入**同一个 service**，按 `eventId` 幂等；先落库后副作用（推送/里程碑），副作用异常只记日志；未知动作不拒绝（语义降级归客户端）
+- `memories/`：共同回忆（Memory，软删除 + 按天倒序）与双人共同时刻（SharedMoment，状态机 `requested→accepted→preparing→ready→playing→completed/partial/failed`）；完成/部分完成自动落回忆（key=`moment:<id>` 幂等），拥抱完成落 `first_hug` 里程碑；`socket.js` 居中协调 prepare/ready/start，只同步开始时间与就绪状态，**禁止逐帧同步**
+- `bond/`（Task 7 新增）：`legacy.js` 只读透传旧火花字段（growth/streak/level，旧库升级不缺字段）；`routes.js` 提供 `GET /api/bond/:userId`（bond.id 即 relationshipId）与 `POST /api/unbind`（删 bond + 双端推 `unbonded`，回忆按 relationshipId 保留不级联删）
+
+### 10.2 客户端领域分层
+- `domain/`（interaction/memory）：纯函数，事件线格式与回忆分组/展示元数据
+- `application/`：`sendInteraction`（Socket → 1.6s ack 超时 → REST 幂等兜底）、`sharedMoment`（REST 权威推进状态机）
+- `actions/`：动作注册表 + **五级降级链**（exact → semantic → generic → neutral-bubble → event-only）；`choreographies.ts` 定义 hug/handhold/shoulder-lean 三套五阶段时间轴
+- `runtime/`：`AvatarRenderer` 端口 + `LegacyPixiAdapter`（旧模型）/ Cubism5 适配器预留；`scene-coordinator` 统一舞台布局；`choreography-runner` 按时间轴走位/播放，对方离线或播放失败 → `partial` 永不抛错
+- `features/memories/`：回忆时间线 UI（里程碑 ⭐ / 共同时刻 🤝 / 纪念日 📅 / 互动 💬），两步确认删除、手动添加纪念日
+
+### 10.3 Task 7 产品清理（2026-09-11）
+- **删除**：火花值、7 级等级、每日任务与奖励、连续天数、`cold` 断联变灰、`growth_update` 事件、`GET /api/quests`、`growth_events` 表、全部 growth 写入语句（`db.js`）、客户端 `BondMeta` 增长字段与 `QuestItem` 类型、互动回执 `growth` 字段
+- **保留并明确只读**：`bonds` 旧三列（`runLegacyAlters` 仍补列，保证老库行可读）+ `bond/legacy.js` 透传；红线"任何路径不再写入"由 `server/test/bond.routes.test.js` 守护（seed 旧值 → 互动 + 拥抱全流程后逐字节不变）
+- **新增流程**：首次互动/首次拥抱（里程碑幂等自动落）、纪念日（回忆页手动添加）、回忆删除（两步确认软删除）、解绑（我的页两步确认 → `POST /api/unbind` → 双端 `unbonded` 复位，回忆保留）
+- 互动后不再触发任何成长副作用；`interaction_ack` 仅回事件保存状态
+
