@@ -2,6 +2,14 @@
 
 > 约定：每次文档/功能迭代，在此追加一条记录；文档改动同时在 `versions/` 存一份带时间戳的不可变副本。
 
+## [V2.0.0-dev · 生产部署] 2026-09-11（master）—— V2.0 Task1-8 首次上生产 taoxie.vip
+
+> commit `7899559` 部署到 `https://taoxie.vip/digital-avatar/`（43.143.231.106，node22/npm10，无 pnpm/git）。生产机首次引入 shared 包：`npm pack` tgz 落 `server/vendor/shared.tgz` 以 `npm install ./vendor/shared.tgz` 解 workspace 依赖。
+
+- 部署：shared tgz 20KB + server/src tar 15KB + dist tar 30MB，scp 上传；src/package/DB 全量带时间戳备份；tmux `davatar` 重启（新 `run-davatar.sh` 纯 LF 启动器）；dist 原子替换备份 `dist.bak.20260911-115312`
+- 验收 P1–P12 全过：HTTPS 全资源 200（含 5 个懒加载 chunk、immutable hash 缓存头）、sw.js=da-cache-v2.0.0、health 200、socket 链路通、quests 404/unbind 已挂载、新表 shared_moments 就位旧 growth_events 只读保留；真机浏览器无 console 错误，「摸摸头」POST /api/interact 200 落库 pat 11:55:57 并触发 `first_interaction` 里程碑，#/admin 懒加载正常；日志 0 error
+- 详见 `docs/versions/20260911_1157_验收文档_V2.0.0-dev_生产部署.md`（含回滚命令）
+
 ## [V2.0.0-dev · Task 8] 2026-09-11（dev）—— 性能分包、弱网 outbox 与发布门禁
 
 > Jing/Tao 重构收官任务（契约 §10）：弱网/断网不丢消息不白屏，主 JS 分包，资产失败有兜底，Jing/Tao 正式角色包建立可执行发布门禁。
