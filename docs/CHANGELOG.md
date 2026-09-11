@@ -9,6 +9,7 @@
 - 部署：shared tgz 20KB + server/src tar 15KB + dist tar 30MB，scp 上传；src/package/DB 全量带时间戳备份；tmux `davatar` 重启（新 `run-davatar.sh` 纯 LF 启动器）；dist 原子替换备份 `dist.bak.20260911-115312`
 - 验收 P1–P12 全过：HTTPS 全资源 200（含 5 个懒加载 chunk、immutable hash 缓存头）、sw.js=da-cache-v2.0.0、health 200、socket 链路通、quests 404/unbind 已挂载、新表 shared_moments 就位旧 growth_events 只读保留；真机浏览器无 console 错误，「摸摸头」POST /api/interact 200 落库 pat 11:55:57 并触发 `first_interaction` 里程碑，#/admin 懒加载正常；日志 0 error
 - 详见 `docs/versions/20260911_1157_验收文档_V2.0.0-dev_生产部署.md`（含回滚命令）
+- 部署后生产实测补充（ACCEPTANCE V8-12）：三档位 HUD cap 60/30/15 正确（saver 保底 15 非 20）、SW v2.0.0 注册激活 + 缓存存在、AppStage/live2d-vendor chunk 按需拉取、零 console error；后台暂停/双人同屏/移动端为真机人工复核项（V8-13，代码路径已被单测覆盖）
 
 ## [V2.0.0-dev · Task 8] 2026-09-11（dev）—— 性能分包、弱网 outbox 与发布门禁
 

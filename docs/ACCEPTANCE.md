@@ -278,19 +278,21 @@
 
 > 代码依据 `docs/superpowers/specs/trae-code-implementation-prompt.md` Task 8；架构说明见 ARCHITECTURE §10.4。
 
-| #     | 验收项                     | 验收标准                                                                                              | 状态 | 验证记录                                                                                               |
-| ----- | -------------------------- | ----------------------------------------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
-| V8-1  | 主 JS 分包                 | 引导包独立且极小；pixi/live2d/舞台/后台均为按需 chunk                                                 | ✅    | build 产物：index 3.29KB(gzip1.65)，live2d-vendor 646KB/AppStage 72.8KB/Admin 70KB/net 41.6KB 全懒加载 |
-| V8-2  | 角色包按需加载             | 模型二进制不进 JS 包，运行时按用户形象 URL 拉取（SW 缓存）                                            | ✅    | dist 无模型资源；models/* 走运行时 fetch + prefetch worker（既有管线）                                 |
-| V8-3  | 60/30/15fps 三档与自动降档 | 档位常量正确，75% 阈值边界判定正确，saver 为 15fps 且不再降档                                         | ✅    | perf-policy.test.ts 10 项；`?perf=`/`?fps=1` 手动验证路径保留                                          |
-| V8-4  | 后台暂停                   | document.hidden 时 app.stop()，回前台重置采样窗口恢复                                                 | ✅    | perf.ts visibilitychange（既有，新增 pausedInBackground 探针供自动化断言）                             |
-| V8-5  | 弱网降级链闭环             | Socket→REST→outbox→重连回放；eventId 幂等去重；离线不落库、恢复顺序送达、重放 duplicate、坏载荷不阻塞 | ✅    | outbox.test.ts 12 项 + scripts/verify-offline-replay.mjs 5 项真实 HTTP 契约验证                        |
-| V8-6  | 断网 UX 不丢消息           | REST 全失败入 localStorage 队列，顶栏显示待发条数，connect/online/回前台自动回放，可手动重试          | ✅    | AppStage 集成 outbox 单例；回放后刷新时间线 + toast 送达提示                                           |
-| V8-7  | 资产失败不白屏             | 首选形象→默认模型回退→安全占位卡片（重试）；对方模型失败不影响己方舞台                                | ✅    | AppStage loadMeModel 两级回退 + stageError overlay；partner load catch                                 |
-| V8-8  | chunk 拉取失败不白屏       | 动态 import 失败 Suspense 兜底 12s 后给「重新加载」（重新发起 import）                                | ✅    | App.tsx BootFallback + attempt 重试机制                                                                |
-| V8-9  | 离线壳可用                 | SW 断网导航回退缓存 index.html；JS/CSS stale-while-revalidate；API/socket 不缓存                      | ✅    | sw.js v2.0.0（cache CACHE 名 da-cache-v2.0.0 随版失效）                                                |
-| V8-10 | Jing/Tao 发布门禁          | 占位包一律阻断发布；合法非占位包可放行；`--release` 非全绿退出 1                                      | ✅    | verify-avatar-contract.mjs 4 测试 + CLI 当前正确阻断 jing/tao 占位包（exit 1）                         |
-| V8-11 | 全量回归                   | scripts 21 + client 107 + server 45 全绿；tsc 零错误；build 成功                                      | ✅    | pnpm test:scripts / vitest / tsc / build 全绿（2026-09-11）                                            |
+| #     | 验收项                         | 验收标准                                                                                                                              | 状态 | 验证记录                                                                                               |
+| ----- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
+| V8-1  | 主 JS 分包                     | 引导包独立且极小；pixi/live2d/舞台/后台均为按需 chunk                                                                                 | ✅    | build 产物：index 3.29KB(gzip1.65)，live2d-vendor 646KB/AppStage 72.8KB/Admin 70KB/net 41.6KB 全懒加载 |
+| V8-2  | 角色包按需加载                 | 模型二进制不进 JS 包，运行时按用户形象 URL 拉取（SW 缓存）                                                                            | ✅    | dist 无模型资源；models/* 走运行时 fetch + prefetch worker（既有管线）                                 |
+| V8-3  | 60/30/15fps 三档与自动降档     | 档位常量正确，75% 阈值边界判定正确，saver 为 15fps 且不再降档                                                                         | ✅    | perf-policy.test.ts 10 项；`?perf=`/`?fps=1` 手动验证路径保留                                          |
+| V8-4  | 后台暂停                       | document.hidden 时 app.stop()，回前台重置采样窗口恢复                                                                                 | ✅    | perf.ts visibilitychange（既有，新增 pausedInBackground 探针供自动化断言）                             |
+| V8-5  | 弱网降级链闭环                 | Socket→REST→outbox→重连回放；eventId 幂等去重；离线不落库、恢复顺序送达、重放 duplicate、坏载荷不阻塞                                 | ✅    | outbox.test.ts 12 项 + scripts/verify-offline-replay.mjs 5 项真实 HTTP 契约验证                        |
+| V8-6  | 断网 UX 不丢消息               | REST 全失败入 localStorage 队列，顶栏显示待发条数，connect/online/回前台自动回放，可手动重试                                          | ✅    | AppStage 集成 outbox 单例；回放后刷新时间线 + toast 送达提示                                           |
+| V8-7  | 资产失败不白屏                 | 首选形象→默认模型回退→安全占位卡片（重试）；对方模型失败不影响己方舞台                                                                | ✅    | AppStage loadMeModel 两级回退 + stageError overlay；partner load catch                                 |
+| V8-8  | chunk 拉取失败不白屏           | 动态 import 失败 Suspense 兜底 12s 后给「重新加载」（重新发起 import）                                                                | ✅    | App.tsx BootFallback + attempt 重试机制                                                                |
+| V8-9  | 离线壳可用                     | SW 断网导航回退缓存 index.html；JS/CSS stale-while-revalidate；API/socket 不缓存                                                      | ✅    | sw.js v2.0.0（cache CACHE 名 da-cache-v2.0.0 随版失效）                                                |
+| V8-10 | Jing/Tao 发布门禁              | 占位包一律阻断发布；合法非占位包可放行；`--release` 非全绿退出 1                                                                      | ✅    | verify-avatar-contract.mjs 4 测试 + CLI 当前正确阻断 jing/tao 占位包（exit 1）                         |
+| V8-11 | 全量回归                       | scripts 21 + client 107 + server 45 全绿；tsc 零错误；build 成功                                                                      | ✅    | pnpm test:scripts / vitest / tsc / build 全绿（2026-09-11）                                            |
+| V8-12 | 生产实测（taoxie.vip，部署后） | 三档位 HUD cap 60/30/15 正确（saver=15 非 20）；SW v2.0.0 注册激活且缓存存在；AppStage/live2d-vendor chunk 按需拉取；零 console error | ✅    | 2026-09-11 生产浏览器实测 `?perf=high\|balanced\|saver&fps=1` + `caches.keys()` + resource timing      |
+| V8-13 | 需真机人工复核项               | 后台暂停（真机切后台 app.stop）、双模型双人同屏（两台设备绑定后同房间）、移动端触屏 balanced 起步                                     | ⏳    | 代码路径已被单测/探针覆盖（pausedInBackground、resolveStartTier isMobile），待真机验证                 |
 
 ## 明确不做（V1 红线）
 
