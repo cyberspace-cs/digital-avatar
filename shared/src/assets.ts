@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 角色资产包类型与校验（契约 §3.3：资产包必须携带 manifest/anchors/capabilities）
  * 统一锚点（契约 §3.3）：head / hand.left / hand.right / foot.left / foot.right / heart / shoulder / hug.chest / root
  */
@@ -17,19 +17,27 @@ export const ANCHOR_NAMES = [
 ] as const
 export type AnchorName = (typeof ANCHOR_NAMES)[number]
 
-/** 渲染引擎：Jing/Tao 走 cubism5，旧四模型走 legacy-pixi */
-export const RENDER_ENGINES = ['cubism5', 'legacy-pixi'] as const
+/** 渲染引擎：Jing/Tao(V2.1 QQ秀路线)走 sprite-sequence，旧四模型走 legacy-pixi，cubism5 保留给未来正式 Live2D 包 */
+export const RENDER_ENGINES = ['cubism5', 'legacy-pixi', 'sprite-sequence'] as const
 export type RenderEngine = (typeof RENDER_ENGINES)[number]
 
 /** 纹理档位（契约要求 4096/2048/1024 三档） */
 export const TEXTURE_TIERS = ['4096', '2048', '1024'] as const
 export type TextureTier = (typeof TEXTURE_TIERS)[number]
 
-/** 动作能力声明：角色包声明自己支持哪些 actionId 及其 motion 资源 */
+/** 动作能力声明：角色包声明自己支持哪些 actionId 及其资源 */
 export interface ActionCapability {
   actionId: string
-  /** motion3.json 相对路径（运行时资产，禁止 PNG 帧动画） */
+  /**
+   * 资源引用。sprite-sequence 包：动作帧序列首帧相对路径（兼容契约校验的"非空路径"）；
+   * cubism5/legacy 包：motion3.json 相对路径。
+   */
   motion: string
+  /**
+   * sprite-sequence 专用：动作帧序列（相对路径，按播放顺序 1..N，8fps）。
+   * 声明了 frames 的能力按 QQ秀式序列帧播放；未声明按 motion 资源处理。
+   */
+  frames?: string[]
   /** 同语义动作降级候选（降级链第 2 级），如 heart 降级为 positive */
   degradesTo?: string[]
   /** 可选：动作建议表情 */
@@ -80,6 +88,15 @@ export function parseActionCapability(input: unknown): ActionCapability {
   if (typeof input.motion !== 'string' || input.motion.length === 0) {
     issues.push('motion 必须是非空路径')
   }
+  if (input.frames !== undefined) {
+    if (
+      !Array.isArray(input.frames) ||
+      input.frames.length === 0 ||
+      !input.frames.every((f) => typeof f === 'string' && f.length > 0)
+    ) {
+      issues.push('frames 必须是非空字符串数组（sprite-sequence 帧序列）')
+    }
+  }
   if (input.degradesTo !== undefined) {
     if (
       !Array.isArray(input.degradesTo) ||
@@ -95,6 +112,7 @@ export function parseActionCapability(input: unknown): ActionCapability {
   return {
     actionId: input.actionId as string,
     motion: input.motion as string,
+    frames: input.frames as string[] | undefined,
     degradesTo: input.degradesTo as string[] | undefined,
     expression: input.expression as string | undefined,
   }

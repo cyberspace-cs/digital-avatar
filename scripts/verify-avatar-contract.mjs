@@ -61,11 +61,15 @@ export function evaluateRelease(pkgName, baseDir = MODELS_DIR) {
 }
 
 /** 在临时目录合成完整合法 fixture（结构镜像真实导出，字节为占位，仅测试用途） */
-function makeValidFixturePkg(root, id = 'jing', { placeholder = false } = {}) {
+function makeValidFixturePkg(root, id = 'jing', { placeholder = false, engine = 'cubism5' } = {}) {
   const dir = join(root, id)
-  mkdirSync(join(dir, 'expressions'), { recursive: true })
-  mkdirSync(join(dir, 'motions'), { recursive: true })
-  mkdirSync(join(dir, 'textures'), { recursive: true })
+  const sprite = engine === 'sprite-sequence'
+  mkdirSync(dir, { recursive: true })
+  if (!sprite) {
+    mkdirSync(join(dir, 'expressions'), { recursive: true })
+    mkdirSync(join(dir, 'motions'), { recursive: true })
+    mkdirSync(join(dir, 'textures'), { recursive: true })
+  }
 
   const model3 = {
     Version: 3,
@@ -82,39 +86,55 @@ function makeValidFixturePkg(root, id = 'jing', { placeholder = false } = {}) {
   const manifest = {
     avatarId: id,
     name: id === 'jing' ? 'Jing' : 'Tao',
-    engine: 'cubism5',
+    engine,
     version: '1.0.0',
-    model3Url: `${id}.model3.json`,
+    model3Url: sprite ? 'idle.png' : `${id}.model3.json`,
     anchors,
-    capabilities: [
-      { actionId: 'idle', motion: 'motions/idle.motion3.json', expression: 'happy' },
-      { actionId: 'wave', motion: 'motions/wave.motion3.json', degradesTo: ['idle'] },
-    ],
-    textures: {
-      4096: `textures/${id}.4096.png`,
-      2048: `textures/${id}.2048.png`,
-      1024: `textures/${id}.1024.png`,
-    },
+    capabilities: sprite
+      ? [
+        { actionId: 'idle', motion: 'idle.png' },
+        { actionId: 'wave', motion: 'frames/wave/frame_01.png', frames: ['frames/wave/frame_01.png', 'frames/wave/frame_02.png'], degradesTo: ['idle'] },
+      ]
+      : [
+        { actionId: 'idle', motion: 'motions/idle.motion3.json', expression: 'happy' },
+        { actionId: 'wave', motion: 'motions/wave.motion3.json', degradesTo: ['idle'] },
+      ],
+    textures: sprite
+      ? undefined
+      : {
+        4096: `textures/${id}.4096.png`,
+        2048: `textures/${id}.2048.png`,
+        1024: `textures/${id}.1024.png`,
+      },
     files: {},
   }
   if (placeholder) manifest.placeholder = true
 
-  const bufs = {
-    [`${id}.model3.json`]: Buffer.from(JSON.stringify(model3)),
-    [`${id}.moc3`]: Buffer.from(`MOC3-FIXTURE-NOT-PRODUCTION-${id}`),
-    [`${id}.physics3.json`]: Buffer.from('{}'),
-    [`${id}.pose3.json`]: Buffer.from('{}'),
-    [`${id}.cdi3.json`]: Buffer.from('{}'),
-    'expressions/happy.exp3.json': Buffer.from('{}'),
-    'motions/idle.motion3.json': Buffer.from('{}'),
-    'motions/wave.motion3.json': Buffer.from('{}'),
-    [`textures/${id}.4096.png`]: Buffer.from('PNG4096-fixture'),
-    [`textures/${id}.2048.png`]: Buffer.from('PNG2048-fixture'),
-    [`textures/${id}.1024.png`]: Buffer.from('PNG1024-fixture'),
-    'anchors.json': Buffer.from(JSON.stringify(anchors)),
-    'capabilities.json': Buffer.from(JSON.stringify(capabilities)),
-  }
+  const bufs = sprite
+    ? {
+      'idle.png': Buffer.from('PNG-idle-fixture'),
+      'frames/wave/frame_01.png': Buffer.from('PNG-wave-1-fixture'),
+      'frames/wave/frame_02.png': Buffer.from('PNG-wave-2-fixture'),
+      'anchors.json': Buffer.from(JSON.stringify(anchors)),
+      'capabilities.json': Buffer.from(JSON.stringify(capabilities)),
+    }
+    : {
+      [`${id}.model3.json`]: Buffer.from(JSON.stringify(model3)),
+      [`${id}.moc3`]: Buffer.from(`MOC3-FIXTURE-NOT-PRODUCTION-${id}`),
+      [`${id}.physics3.json`]: Buffer.from('{}'),
+      [`${id}.pose3.json`]: Buffer.from('{}'),
+      [`${id}.cdi3.json`]: Buffer.from('{}'),
+      'expressions/happy.exp3.json': Buffer.from('{}'),
+      'motions/idle.motion3.json': Buffer.from('{}'),
+      'motions/wave.motion3.json': Buffer.from('{}'),
+      [`textures/${id}.4096.png`]: Buffer.from('PNG4096-fixture'),
+      [`textures/${id}.2048.png`]: Buffer.from('PNG2048-fixture'),
+      [`textures/${id}.1024.png`]: Buffer.from('PNG1024-fixture'),
+      'anchors.json': Buffer.from(JSON.stringify(anchors)),
+      'capabilities.json': Buffer.from(JSON.stringify(capabilities)),
+    }
   for (const [rel, buf] of Object.entries(bufs)) {
+    mkdirSync(dirname(join(dir, rel)), { recursive: true })
     writeFileSync(join(dir, rel), buf)
     manifest.files[rel] = sha256(buf)
   }
@@ -128,30 +148,44 @@ function makeValidFixturePkg(root, id = 'jing', { placeholder = false } = {}) {
   test.beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'avatar-release-')) })
   test.afterEach(() => { rmSync(root, { recursive: true, force: true }) })
 
-  test('发布门禁：仓库内 jing/tao 占位包必须被阻断（不得误发布空壳）', () => {
+  test('发布门禁：仓库内 jing/tao 正式 sprite 包（V2.1 QQ秀路线）必须放行', () => {
     for (const pkg of RELEASE_PACKAGES) {
       const r = evaluateRelease(pkg)
       assert.equal(r.exists, true, `${pkg} 包目录应存在`)
-      assert.equal(r.placeholder, true, `${pkg} manifest 应带 placeholder=true 标记`)
-      assert.equal(r.releasable, false, `${pkg} 占位包绝不能通过发布门禁：${r.reasons.join('; ')}`)
-      assert.ok(r.reasons.some((x) => x.startsWith('PLACEHOLDER')))
+      assert.equal(r.placeholder, false, `${pkg} manifest 不应再是占位包`)
+      assert.equal(r.releasable, true, `${pkg} 正式 sprite 包应通过发布门禁：${r.reasons.join('; ')}`)
     }
   })
 
-  test('发布门禁：合法且非占位的正式 fixture 放行', () => {
+  test('发布门禁：占位包（fixture placeholder=true）必须被阻断（语义保留）', () => {
+    const base = mkdirSync(join(root, 'models'), { recursive: true })
+    makeValidFixturePkg(base, 'jing', { placeholder: true })
+    const r = evaluateRelease('jing', base)
+    assert.equal(r.releasable, false, '占位包绝不能通过发布门禁')
+    assert.ok(r.reasons.some((x) => x.startsWith('PLACEHOLDER')))
+  })
+
+  test('发布门禁：合法且非占位的正式 fixture（cubism5）放行', () => {
     const base = mkdirSync(join(root, 'models'), { recursive: true })
     makeValidFixturePkg(base, 'jing', { placeholder: false })
     const r = evaluateRelease('jing', base)
     assert.equal(r.releasable, true, `合法正式包应放行：${r.reasons.join('; ')}`)
   })
 
-  test('发布门禁：非占位但契约损坏（删 moc3）仍阻断', () => {
-    const base = mkdirSync(join(root, 'models'), { recursive: true })
+  test('发布门禁：非占位但契约损坏（删 moc3 / 删帧）仍阻断', () => {
+    const base = mkdirSync(join(root, 'models-cubism'), { recursive: true })
     const dir = makeValidFixturePkg(base, 'tao', { placeholder: false })
     rmSync(join(dir, 'tao.moc3'))
     const r = evaluateRelease('tao', base)
     assert.equal(r.releasable, false)
     assert.ok(r.reasons.some((x) => x.startsWith('CONTRACT:')))
+
+    const base2 = mkdirSync(join(root, 'models-sprite'), { recursive: true })
+    const dir2 = makeValidFixturePkg(base2, 'tao', { placeholder: false, engine: 'sprite-sequence' })
+    rmSync(join(dir2, 'frames', 'wave', 'frame_02.png'))
+    const r2 = evaluateRelease('tao', base2)
+    assert.equal(r2.releasable, false, `缺帧包必须阻断：${r2.reasons.join('; ')}`)
+    assert.ok(r2.reasons.some((x) => x.includes('FRAME_MISSING')))
   })
 
   test('发布门禁：包目录缺失按不可发布处理（不抛错）', () => {

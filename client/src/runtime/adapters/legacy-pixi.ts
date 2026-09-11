@@ -138,7 +138,8 @@ export class LegacyPixiAdapter implements AvatarRenderer {
 export function legacyManifest(avatarId: string): AvatarManifest | null {
   const def = avatarDef(avatarId)
   const url = MODEL_URLS[avatarId]
-  if (!def || !url) return null
+  // sprite-sequence 形态（jing/tao）有自己的 manifest.json，绝不走 legacy 合成
+  if (!def || !url || def.engine === 'sprite-sequence') return null
   return parseAvatarManifest({
     avatarId: def.id,
     name: def.label,

@@ -83,43 +83,48 @@ export function validateAvatarPackage(pkgPath) {
     }
   }
 
-  // ---- 必需运行时文件（model3/moc3/physics/pose/cdi）----
+  // ---- 必需运行时文件 ----
+  // V2.1 sprite-sequence（QQ秀路线）：model3Url 复用为主视觉资源路径（idle.png），
+  // 无 moc3/physics/pose/cdi、无 expressions/motions 目录、无纹理三档——跳过 Cubism 专属校验
+  const isSprite = manifest?.engine === 'sprite-sequence'
   const requiredFiles = [] // [checkName, relPath]
   let model3Rel = manifest ? posix(manifest.model3Url).replace(/^\//, '') : null
   if (manifest) {
     if (!existsSync(join(pkgPath, model3Rel))) {
-      fail('files', `FILE_MISSING: model3.json 缺失: ${model3Rel}`)
+      fail('files', `FILE_MISSING: ${isSprite ? '主视觉资源(idle)' : 'model3.json'} 缺失: ${model3Rel}`)
       model3Rel = null
     } else {
       requiredFiles.push(model3Rel)
     }
   }
 
-  const refs = model3Rel ? readModel3Refs(pkgPath, model3Rel) : null
-  const refTargets = refs
-    ? { moc3: refs.Moc, physics3: refs.Physics, pose3: refs.Pose, cdi3: refs.DisplayInfo }
-    : { moc3: globOne(pkgPath, /\.moc3$/), physics3: globOne(pkgPath, /\.physics3\.json$/), pose3: globOne(pkgPath, /\.pose3\.json$/), cdi3: globOne(pkgPath, /\.cdi3\.json$/) }
-  for (const [kind, rel] of Object.entries(refTargets)) {
-    if (!rel) { fail('files', `FILE_MISSING: ${kind} 文件未找到（${refs ? 'model3 未声明' : '包内无匹配'}）`); continue }
-    if (!existsSync(join(pkgPath, rel))) fail('files', `FILE_MISSING: model3 引用缺失: ${rel}（${kind}）`)
-    else requiredFiles.push(posix(rel))
-  }
-
-  // ---- 目录：expressions / motions ----
-  for (const dirName of ['expressions', 'motions']) {
-    const p = join(pkgPath, dirName)
-    if (!existsSync(p) || !statSync(p).isDirectory()) fail('dirs', `DIR_MISSING: 目录缺失: ${dirName}/`)
-  }
-
-  // ---- 纹理三档 ----
-  if (manifest) {
-    for (const tier of TEXTURE_TIERS) {
-      const rel = manifest.textures?.[tier]
-      if (!rel) { fail('textures', `TEXTURE_MISSING_TIER: 纹理 ${tier} 档未在 manifest.textures 声明`); continue }
-      if (!existsSync(join(pkgPath, rel))) fail('textures', `TEXTURE_MISSING: 纹理 ${tier} 档文件缺失: ${rel}`)
+  if (!isSprite) {
+    const refs = model3Rel ? readModel3Refs(pkgPath, model3Rel) : null
+    const refTargets = refs
+      ? { moc3: refs.Moc, physics3: refs.Physics, pose3: refs.Pose, cdi3: refs.DisplayInfo }
+      : { moc3: globOne(pkgPath, /\.moc3$/), physics3: globOne(pkgPath, /\.physics3\.json$/), pose3: globOne(pkgPath, /\.pose3\.json$/), cdi3: globOne(pkgPath, /\.cdi3\.json$/) }
+    for (const [kind, rel] of Object.entries(refTargets)) {
+      if (!rel) { fail('files', `FILE_MISSING: ${kind} 文件未找到（${refs ? 'model3 未声明' : '包内无匹配'}）`); continue }
+      if (!existsSync(join(pkgPath, rel))) fail('files', `FILE_MISSING: model3 引用缺失: ${rel}（${kind}）`)
       else requiredFiles.push(posix(rel))
     }
-  }
+
+    // ---- 目录：expressions / motions ----
+    for (const dirName of ['expressions', 'motions']) {
+      const p = join(pkgPath, dirName)
+      if (!existsSync(p) || !statSync(p).isDirectory()) fail('dirs', `DIR_MISSING: 目录缺失: ${dirName}/`)
+    }
+
+    // ---- 纹理三档 ----
+    if (manifest) {
+      for (const tier of TEXTURE_TIERS) {
+        const rel = manifest.textures?.[tier]
+        if (!rel) { fail('textures', `TEXTURE_MISSING_TIER: 纹理 ${tier} 档未在 manifest.textures 声明`); continue }
+        if (!existsSync(join(pkgPath, rel))) fail('textures', `TEXTURE_MISSING: 纹理 ${tier} 档文件缺失: ${rel}`)
+        else requiredFiles.push(posix(rel))
+      }
+    }
+  } // end !isSprite
 
   // ---- anchors.json（9 统一锚点，恰好覆盖）----
   const anchorsRel = 'anchors.json'
@@ -170,13 +175,23 @@ export function validateAvatarPackage(pkgPath) {
     }
   }
 
-  // ---- 能力引用的运行时资产（motion/expression 文件）----
+  // ---- 能力引用的运行时资产（motion/expression/frames 文件）----
   if (manifest) {
     for (const cap of manifest.capabilities) {
       if (!existsSync(join(pkgPath, cap.motion))) {
         fail('motions', `MOTION_MISSING: capability motion 文件缺失: ${cap.motion}（${cap.actionId}）`)
       } else {
         requiredFiles.push(posix(cap.motion))
+      }
+      // V2.1 sprite-sequence：帧序列文件逐一存在（QQ秀"动作即素材包"）
+      if (cap.frames) {
+        for (const rel of cap.frames) {
+          if (!existsSync(join(pkgPath, rel))) {
+            fail('motions', `FRAME_MISSING: capability 帧文件缺失: ${rel}（${cap.actionId}）`)
+          } else {
+            requiredFiles.push(posix(rel))
+          }
+        }
       }
       if (cap.expression) {
         const exprRel = `expressions/${cap.expression}.exp3.json`

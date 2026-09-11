@@ -1,30 +1,95 @@
 {
   "avatarId": "tao",
   "name": "Tao",
-  "engine": "cubism5",
-  "version": "0.0.0",
-  "model3Url": "tao.model3.json",
-  "placeholder": true,
+  "engine": "sprite-sequence",
+  "version": "1.0.0",
+  "model3Url": "idle.png",
+  "placeholder": false,
   "anchors": {
-    "head": { "x": 0.5, "y": 0.08 },
-    "hand.left": { "x": 0.18, "y": 0.45 },
-    "hand.right": { "x": 0.82, "y": 0.45 },
-    "foot.left": { "x": 0.35, "y": 1 },
-    "foot.right": { "x": 0.65, "y": 1 },
-    "heart": { "x": 0.5, "y": 0.35 },
-    "shoulder": { "x": 0.5, "y": 0.25 },
-    "hug.chest": { "x": 0.5, "y": 0.42 },
-    "root": { "x": 0.5, "y": 1 }
+    "head": {
+      "x": 0.5,
+      "y": 0.08
+    },
+    "hand.left": {
+      "x": 0.18,
+      "y": 0.45
+    },
+    "hand.right": {
+      "x": 0.82,
+      "y": 0.45
+    },
+    "foot.left": {
+      "x": 0.35,
+      "y": 1
+    },
+    "foot.right": {
+      "x": 0.65,
+      "y": 1
+    },
+    "heart": {
+      "x": 0.5,
+      "y": 0.35
+    },
+    "shoulder": {
+      "x": 0.5,
+      "y": 0.25
+    },
+    "hug.chest": {
+      "x": 0.5,
+      "y": 0.42
+    },
+    "root": {
+      "x": 0.5,
+      "y": 1
+    }
   },
   "capabilities": [
-    { "actionId": "idle", "motion": "motions/idle.motion3.json", "expression": "happy" },
-    { "actionId": "wave", "motion": "motions/wave.motion3.json", "expression": "happy", "degradesTo": ["idle"] },
-    { "actionId": "heart", "motion": "motions/heart.motion3.json", "expression": "happy", "degradesTo": ["wave", "idle"] },
-    { "actionId": "hug", "motion": "motions/hug_ready.motion3.json", "expression": "happy", "degradesTo": ["wave", "idle"] }
+    {
+      "actionId": "idle",
+      "motion": "idle.png"
+    },
+    {
+      "actionId": "wave",
+      "motion": "frames/wave/frame_01.png",
+      "frames": [
+        "frames/wave/frame_01.png",
+        "frames/wave/frame_02.png",
+        "frames/wave/frame_03.png",
+        "frames/wave/frame_04.png",
+        "frames/wave/frame_05.png"
+      ],
+      "degradesTo": [
+        "idle"
+      ]
+    },
+    {
+      "actionId": "heart",
+      "motion": "frames/heart/frame_01.png",
+      "frames": [
+        "frames/heart/frame_01.png",
+        "frames/heart/frame_02.png",
+        "frames/heart/frame_03.png",
+        "frames/heart/frame_04.png",
+        "frames/heart/frame_05.png"
+      ],
+      "degradesTo": [
+        "wave",
+        "idle"
+      ]
+    }
   ],
-  "textures": {
-    "4096": "textures/tao.4096.png",
-    "2048": "textures/tao.2048.png",
-    "1024": "textures/tao.1024.png"
+  "thumbnailUrl": "idle.png",
+  "files": {
+    "frames/wave/frame_01.png": "6d1b762348ccfbc414070c24d7612acc3a65ab8029d069087297fbc34af65ea7",
+    "frames/wave/frame_02.png": "9521f44d1bea2929a999f73afc2dd166dfdaf74690ee20b828159fe2421f5e95",
+    "frames/wave/frame_03.png": "f354a29e65f66e8c8b62ae1e8916d426e3ae85ee8e72bb47d7c978181fc2423f",
+    "frames/wave/frame_04.png": "afb63cccbcd9d7c55a5bdc9a324153c2e1bf548905b45e08a90d0f093d7f9754",
+    "frames/wave/frame_05.png": "bdeeea5008f0cd140df0c1a387b029bc8d4243c72773e4d482a6771fb4a4d412",
+    "frames/heart/frame_01.png": "bde204a7128f925f2b889f098212e78968119aa3d54a12781f3719315b66a746",
+    "frames/heart/frame_02.png": "d3d2d6876aefa59e64c440a87a8a56a9639511a373caf406cfd34353f851d9d5",
+    "frames/heart/frame_03.png": "bb87f268ab807a03c40a3d8869ac38264d7f193cdc35b39e755fd5d43b34e621",
+    "frames/heart/frame_04.png": "996921eb414ae3e5e2646d9d9e739311b9559db15f6c8f2914ef2c167e1b0e00",
+    "frames/heart/frame_05.png": "0e2d84cac9900b9ff5d9ccc80bd7c942ec51797fc1f36f5cc6140c077a39beed",
+    "idle.png": "6d1b762348ccfbc414070c24d7612acc3a65ab8029d069087297fbc34af65ea7"
   }
 }

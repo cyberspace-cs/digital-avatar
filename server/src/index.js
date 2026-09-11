@@ -42,7 +42,9 @@ app.post('/api/identity', (req, res) => {
   const id = uuid()
   // V1.3.2：创建时随机分配一个形象（形象库见 client/src/live2d/models.ts）。
   // V1.5.0：mark → chitose（Mark 卡通小孩 + 条款禁改绘美男，已整体移除）
-  const INITIAL_AVATARS = ['hiyori', 'haru', 'natori', 'chitose']
+  // V2.1 QQ秀路线：jing/tao 序列帧轻量角色包加入初始随机池（加载省一半首屏带宽，
+  // 客户端按 manifest.engine=sprite-sequence 自动选 SpriteAvatar 渲染）
+  const INITIAL_AVATARS = ['hiyori', 'haru', 'natori', 'chitose', 'jing', 'tao']
   const avatar = INITIAL_AVATARS[Math.floor(Math.random() * INITIAL_AVATARS.length)]
   q.insertUser.run(id, name.trim(), avatar)
   res.json({ user: q.getUser.get(id) })
@@ -116,7 +118,7 @@ app.get('/api/state/:userId', (req, res) => {
 
 // ---------- V1.6.0 情侣衣橱：一键情侣装（服务端权威结算） ----------
 // 与 client/src/live2d/couple.ts 保持镜像（服务端是结算权威，不能依赖客户端传槽位）
-const AVATAR_GENDER = { hiyori: 'f', haru: 'f', natori: 'm', chitose: 'm' }
+const AVATAR_GENDER = { hiyori: 'f', haru: 'f', natori: 'm', chitose: 'm', jing: 'f', tao: 'm' }
 const COUPLE_THEMES = {
   seafog: { label: '海雾情侣', m: { style: 'navy' }, f: { style: 'ocean' } },
   duskcherry: { label: '暮樱情侣', m: { style: 'charcoal' }, f: { style: 'sakura' } },

@@ -269,7 +269,7 @@ describe('Cubism5WebAdapter — 生命周期', () => {
   })
 })
 
-describe('占位 fixture 契约（Jing/Tao 正式资产到位前）', () => {
+describe('jing/tao 序列帧角色包契约', () => {
   const readPlaceholder = (id: 'jing' | 'tao') =>
     JSON.parse(
       readFileSync(fileURLToPath(new URL(`../../../public/models/${id}/manifest.json`, import.meta.url)), 'utf8'),
@@ -278,7 +278,7 @@ describe('占位 fixture 契约（Jing/Tao 正式资产到位前）', () => {
   it('jing/tao manifest 始终通过 parseAvatarManifest 契约校验', () => {
     for (const id of ['jing', 'tao'] as const) {
       const m = parseAvatarManifest(readPlaceholder(id))
-      expect(m.engine).toBe('cubism5')
+      expect(m.engine).toBe('sprite-sequence')
       expect(m.avatarId).toBe(id)
       expect(Object.keys(m.anchors)).toHaveLength(9)
       expect(m.capabilities.some((c) => c.actionId === 'idle')).toBe(true)

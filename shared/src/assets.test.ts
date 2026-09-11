@@ -31,6 +31,16 @@ describe('parseActionCapability', () => {
     expect(() => parseActionCapability({ ...baseCapability, actionId: 'WAVE' })).toThrow(SchemaError)
     expect(() => parseActionCapability({ ...baseCapability, motion: '' })).toThrow(SchemaError)
   })
+
+  it('V2.1 sprite-sequence：接受 frames 帧序列声明', () => {
+    const cap = parseActionCapability({ ...baseCapability, frames: ['frames/wave/frame_01.png', 'frames/wave/frame_02.png'] })
+    expect(cap.frames).toEqual(['frames/wave/frame_01.png', 'frames/wave/frame_02.png'])
+  })
+
+  it('V2.1 sprite-sequence：拒绝非法 frames（空数组/非字符串元素）', () => {
+    expect(() => parseActionCapability({ ...baseCapability, frames: [] })).toThrow(SchemaError)
+    expect(() => parseActionCapability({ ...baseCapability, frames: ['ok', 42] })).toThrow(SchemaError)
+  })
 })
 
 describe('parseAvatarManifest', () => {

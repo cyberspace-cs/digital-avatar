@@ -1,3 +1,7 @@
 {
-  "actionIds": ["idle", "wave", "heart", "hug"]
+  "actionIds": [
+    "idle",
+    "wave",
+    "heart"
+  ]
 }

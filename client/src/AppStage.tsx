@@ -2,8 +2,11 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import * as PIXI from 'pixi.js'
 import './pixi-setup'
 import { AvatarSprite, OUTFIT_STYLES, OUTFIT_VARIANTS } from './live2d/avatar'
+// V2.1 QQ秀路线：Jing/Tao 序列帧轻量形象（与 AvatarSprite 同舞台公共面，可互换）
+import { SpriteAvatar } from './live2d/sprite-avatar'
+import type { StageSprite } from './live2d/sprite-avatar'
 import { COUPLE_THEMES, COUPLE_THEME_ORDER, matchCoupleTheme } from './live2d/couple'
-import { AVATAR_LIBRARY, AVATAR_LABELS, AVATAR_GENDER, AVATAR_HALF_BODY, MODEL_URLS, DEFAULT_AVATAR } from './live2d/models'
+import { AVATAR_LIBRARY, AVATAR_LABELS, AVATAR_GENDER, AVATAR_HALF_BODY, MODEL_URLS, DEFAULT_AVATAR, isSpriteAvatar } from './live2d/models'
 import { PerfGovernor } from './live2d/perf'
 import type { QualityTier } from './live2d/perf'
 import { api } from './api'
@@ -32,7 +35,25 @@ const MODEL_SCALE = 0.12
 const homeYFor = (avatarKey: string, h: number) =>
   sceneHomeYFor(AVATAR_HALF_BODY[avatarKey] === true, h, window.innerHeight)
 // 形象按钮 emoji（衣橱芯片用）
-const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', haru: '📚', natori: '🌙', chitose: '🧥' }
+const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', haru: '📚', natori: '🌙', chitose: '🧥', jing: '🎀', tao: '⚡' }
+
+/**
+ * V2.1：按形象引擎确保舞台实例类型（AvatarSprite ⇄ SpriteAvatar 可互换）。
+ * 引擎切换时重建实例并迁移 home/style/variant/mood，旧实例销毁。
+ * 模块级纯逻辑（不依赖组件状态），mount effect 与 swap 路径共用。
+ */
+const ensureSpriteClass = (key: string, cur: StageSprite): StageSprite => {
+  const wantSprite = isSpriteAvatar(key)
+  if (wantSprite === (cur instanceof SpriteAvatar)) return cur
+  const next: StageSprite = wantSprite ? new SpriteAvatar() : new AvatarSprite()
+  next.home = { ...cur.home }
+  next.target = { ...cur.target }
+  next.style = cur.style
+  next.variant = cur.variant
+  next.mood = cur.mood
+  cur.destroy()
+  return next
+}
 
 type MenuPos = { x: number; y: number; target: 'me' | 'partner' } | null
 type Tab = 'companion' | 'memories' | 'records' | 'me'
@@ -84,8 +105,8 @@ const TABS: { id: Tab; emoji: string; label: string }[] = [
 export default function App() {
   const canvasHost = useRef<HTMLDivElement>(null)
   const appRef = useRef<PIXI.Application | null>(null)
-  const meSprite = useRef<AvatarSprite | null>(null)
-  const partnerSprite = useRef<AvatarSprite | null>(null)
+  const meSprite = useRef<StageSprite | null>(null)
+  const partnerSprite = useRef<StageSprite | null>(null)
   const [theme, setTheme] = useState<'v1' | 'v2'>(
     () => (localStorage.getItem('da_theme') as 'v1' | 'v2') ?? 'v1',
   )
@@ -276,8 +297,11 @@ export default function App() {
     const tier = governor.current
     governorRef.current = governor
 
-    const meS = new AvatarSprite()
-    const partnerS = new AvatarSprite()
+    // V2.1：初始形象是序列帧角色包（jing/tao）时用 SpriteAvatar，否则旧管线 AvatarSprite
+    let meS: StageSprite = isSpriteAvatar(meAvatarRef.current ?? DEFAULT_AVATAR)
+      ? new SpriteAvatar()
+      : new AvatarSprite()
+    let partnerS: StageSprite = new AvatarSprite()
     meSprite.current = meS
     partnerSprite.current = partnerS
 
@@ -304,6 +328,9 @@ export default function App() {
     }
     const loadMeModel = async (key: string, isFallback = false): Promise<void> => {
       try {
+        // V2.1：形象引擎与当前实例类型不符时重建（AvatarSprite ⇄ SpriteAvatar）
+        meS = ensureSpriteClass(key, meS)
+        meSprite.current = meS
         await meS.load(app.stage, MODEL_URLS[key] ?? MODEL_URLS[DEFAULT_AVATAR], MODEL_SCALE, tier)
         meAvatarRef.current = key
         placeMe(key)
@@ -337,6 +364,9 @@ export default function App() {
       // V1.5.0 衣橱 2.0：加载前就设置对方款式（同防双开）
       const pOutfit = stateRef.current.partner?.outfit
       if (pOutfit && pOutfit !== 'base') partnerS.variant = pOutfit
+      // V2.1：对方形象是序列帧角色包时切换实例类型
+      partnerS = ensureSpriteClass(pAvatar, partnerS)
+      partnerSprite.current = partnerS
       partnerS.load(app.stage, MODEL_URLS[pAvatar] ?? MODEL_URLS.natori, MODEL_SCALE, tier).then(() => {
         // 与自己同款 home 规则（全身贴 Dock / 半身压边）
         partnerS.setPosition(window.innerWidth * 0.68, homeYFor(pAvatar, partnerS.model?.height ?? 0))
@@ -353,11 +383,17 @@ export default function App() {
     partnerLoaderRef.current = loadPartnerModel
 
       // 自动化测试/调试探针（生产保留无害，仅供控制台检查舞台状态）
-      ; (window as any).__pixi = { app, meS, partnerS }
+      // V2.1：meS/partnerS 用 getter——ensureSpriteClass 运行期换实例后探针仍指向当前实例
+      ; (window as any).__pixi = {
+        app,
+        get meS() { return meSprite.current },
+        get partnerS() { return partnerSprite.current },
+      }
 
     app.ticker.add(() => {
-      meS.tick()
-      partnerS.tick()
+      // V2.1：经 ref 取实例——loadMeModel/loadPartnerModel 可能在运行期把实例换成 SpriteAvatar
+      meSprite.current?.tick()
+      partnerSprite.current?.tick()
     })
 
     return () => {
@@ -383,7 +419,7 @@ export default function App() {
   const stageTouchDisposer = useRef<(() => void) | null>(null)
   const bindStageTouch = (app: PIXI.Application) => {
     const canvas = app.view as HTMLCanvasElement
-    let active: { who: 'me' | 'partner'; sprite: AvatarSprite } | null = null
+    let active: { who: 'me' | 'partner'; sprite: StageSprite } | null = null
     let dragging = false
     let moved = 0
     let last = { x: 0, y: 0 }
@@ -404,7 +440,7 @@ export default function App() {
      *  V1.3.3 修复：不能用 getBounds（moc 画布含大块空白）做兜底——对方画布
      *  会盖住空白点击区导致拖错人/拖不动；也不能固定 partner 优先。 */
     const pick = (x: number, y: number) => {
-      const candidates: Array<{ who: 'me' | 'partner'; sprite: AvatarSprite | null }> = [
+      const candidates: Array<{ who: 'me' | 'partner'; sprite: StageSprite | null }> = [
         { who: 'partner', sprite: partnerSprite.current },
         { who: 'me', sprite: meSprite.current },
       ]
@@ -426,7 +462,7 @@ export default function App() {
         }
       }
       // 2) 最近中心兜底（点在角色附近空白时的触屏宽容）
-      let best: { who: 'me' | 'partner'; sprite: AvatarSprite; d2: number } | null = null
+      let best: { who: 'me' | 'partner'; sprite: StageSprite; d2: number } | null = null
       for (const c of candidates) {
         const b = c.sprite?.realBounds?.()
         if (!b) continue
@@ -529,7 +565,7 @@ export default function App() {
   }
 
   /** 拖到屏幕边缘时的探头/倾斜姿态 */
-  const edgePose = (sprite: AvatarSprite) => {
+  const edgePose = (sprite: StageSprite) => {
     const model = sprite.model
     if (!model) return
     const W = window.innerWidth
@@ -553,7 +589,11 @@ export default function App() {
   // ---------- 发送互动（V2.0 Task 3 重构） ----------
   // 动作语义与降级链在 actions/registry：旧模型能力表下 feed/flower 降级为 wave（与
   // V1.2 行为一致），未知动作落通用反应（idle+表情），动画失败不阻断事件发送
-  const playPlanLocal = (sprite: AvatarSprite | null, plan: ActionPlan) => {
+  /** 能力表按形象形态取：序列帧角色包用真实 manifest 声明，旧模型用合成 legacy 表 */
+  const capsFor = (sprite: StageSprite | null) =>
+    sprite instanceof SpriteAvatar && sprite.manifest ? sprite.manifest.capabilities : legacyCapabilities()
+
+  const playPlanLocal = (sprite: StageSprite | null, plan: ActionPlan) => {
     if (plan.level === 'exact' || plan.level === 'semantic') {
       sprite?.play(plan.actionId)
     } else if (plan.level === 'generic') {
@@ -573,10 +613,14 @@ export default function App() {
     }
   }
 
-  /** 旧模型 → 渲染器端口（编排走位/动作都走端口，内部过动作注册表降级链） */
-  const adapterFor = (sprite: AvatarSprite | null, avatarKey: string | null): LegacyPixiAdapter | null => {
+  /** 旧模型/序列帧形象 → 渲染器端口（编排走位/动作都走端口，内部过动作注册表降级链）。
+ *  V2.1：序列帧形象（SpriteAvatar）用真实 manifest 能力表；旧模型用合成 legacy manifest。 */
+  const adapterFor = (sprite: StageSprite | null, avatarKey: string | null): LegacyPixiAdapter | null => {
     if (!sprite?.model) return null
-    const manifest = legacyManifest(avatarKey ?? DEFAULT_AVATAR) ?? legacyManifest(DEFAULT_AVATAR)
+    const manifest =
+      sprite instanceof SpriteAvatar && sprite.manifest
+        ? sprite.manifest
+        : legacyManifest(avatarKey ?? DEFAULT_AVATAR) ?? legacyManifest(DEFAULT_AVATAR)
     return manifest ? new LegacyPixiAdapter(sprite, manifest) : null
   }
 
@@ -720,7 +764,7 @@ export default function App() {
       return
     }
     // 本地反馈先行（未绑定点按钮也有动作反馈，而不是"点了没反应"）
-    playPlanLocal(meSprite.current, resolveAction(legacyCapabilities(), action))
+    playPlanLocal(meSprite.current, resolveAction(capsFor(meSprite.current), action))
     if (!message) {
       setBubble({ who: 'me', text: actionBubble(action) })
       setTimeout(() => setBubble(null), 5000)
@@ -771,7 +815,7 @@ export default function App() {
     pS.play('pat')
     pS.setMood('happy')
     await new Promise((r) => setTimeout(r, 3000))
-    pS.goHome()
+    pS.returnHome()
     pS.setMood('neutral')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -805,7 +849,7 @@ export default function App() {
     setTimeout(() => setBubble(null), 5000)
     if (!sprite) return
     // V2.0 Task 3：接收侧播放同样走动作注册表降级链（feed/flower→wave，未知动作→通用反应）
-    const plan = resolveAction(legacyCapabilities(), ev.action)
+    const plan = resolveAction(capsFor(sprite), ev.action)
     playPlanLocal(sprite, plan)
     if (ev.action === 'heart' || ev.action === 'hug') spawnHearts(sprite.x, sprite.y - 260, 6, '💛')
     if (ev.action === 'feed') spawnHearts(sprite.x, sprite.y - 260, 5, '🧁')
@@ -1003,24 +1047,29 @@ export default function App() {
     const home = { ...sprite.home }
     const prev = meAvatarRef.current
     meAvatarRef.current = key
+    // V2.1：形象引擎与当前实例类型不符（如旧模型 ⇄ jing/tao 序列帧包）→ 重建实例
+    const target = ensureSpriteClass(key, sprite)
+    meSprite.current = target
     try {
-      await sprite.swap(app.stage, MODEL_URLS[key], MODEL_SCALE, governorRef.current?.current ?? 'high')
+      await target.swap(app.stage, MODEL_URLS[key], MODEL_SCALE, governorRef.current?.current ?? 'high')
     } catch (e) {
       // swap 先销毁旧模型才加载新模型：失败必须回滚旧形象，不能留空白舞台
       console.error('[swap] 模型加载失败', e)
       meAvatarRef.current = prev
       if (prev !== key && MODEL_URLS[prev]) {
-        await sprite
+        const back = ensureSpriteClass(prev, target)
+        meSprite.current = back
+        await back
           .swap(app.stage, MODEL_URLS[prev], MODEL_SCALE, governorRef.current?.current ?? 'high')
           .catch(() => { })
-        sprite.setPosition(home.x, homeYFor(prev, sprite.model?.height ?? 0))
-        sprite.setMood(stateRef.current.mood)
+        back.setPosition(home.x, homeYFor(prev, back.model?.height ?? 0))
+        back.setMood(stateRef.current.mood)
       }
       return false
     }
     // V1.6.2：形象切换后按新模型的半身/全身规则重算 home y（旧 home 是上一个模型的构图）
-    sprite.setPosition(home.x, homeYFor(key, sprite.model?.height ?? 0))
-    sprite.setMood(stateRef.current.mood)
+    target.setPosition(home.x, homeYFor(key, target.model?.height ?? 0))
+    target.setMood(stateRef.current.mood)
     return true
   }
 
@@ -1178,12 +1227,15 @@ export default function App() {
       }
       const home = { ...sprite.home }
       partnerAvatarRef.current = look.avatar
-      sprite
+      // V2.1：对方形象引擎与当前实例类型不符 → 重建实例（旧实例在 ensure 内销毁）
+      const target = ensureSpriteClass(look.avatar, sprite)
+      partnerSprite.current = target
+      target
         .swap(app.stage, MODEL_URLS[look.avatar], MODEL_SCALE, governorRef.current?.current ?? 'high')
         .then(() => {
-          sprite.setPosition(home.x, homeYFor(look.avatar ?? partnerAvatarRef.current ?? 'natori', sprite.model?.height ?? 0))
-          sprite.model!.visible = !!stateRef.current.partner
-          sprite.setMood(stateRef.current.partnerMood ?? 'neutral')
+          target.setPosition(home.x, homeYFor(look.avatar ?? partnerAvatarRef.current ?? 'natori', target.model?.height ?? 0))
+          target.model!.visible = !!stateRef.current.partner
+          target.setMood(stateRef.current.partnerMood ?? 'neutral')
         })
         .catch((e) => console.error('[swap] 对方形象加载失败', e))
     } else if (look.outfit && look.outfit !== (sprite.variant ?? 'base')) {

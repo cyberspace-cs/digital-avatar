@@ -205,7 +205,7 @@ describe('legacyManifest — 旧模型合成 manifest', () => {
   })
 
   it('未注册形象返回 null', () => {
-    expect(legacyManifest('jing')).toBeNull() // Jing 要等正式资产包（Task 5），不走 legacy 合成
+    expect(legacyManifest('jing')).toBeNull() // jing/tao 是 sprite-sequence 形态，不走 legacy 合成
     expect(legacyManifest('')).toBeNull()
   })
 })

@@ -25,6 +25,11 @@ export interface AvatarDef {
   path: string
   /** 性别（V1.5.0）：衣橱色板按此过滤（男模显示男色板，女模显示女色板） */
   gender: 'm' | 'f'
+  /**
+   * 渲染形态（V2.1 QQ秀路线）：'sprite-sequence' = PNG 序列帧轻量角色包
+   * （path 指向 manifest.json，SpriteAvatar 加载）；缺省 = legacy-pixi（Cubism model3）
+   */
+  engine?: 'sprite-sequence'
   /** 半身像模型：官方 moc 无腿部部件（如 chitose 只有「体」无「下半身」），
    * 按"胸像立绘"构图渲染（放大 + 截断边压出屏幕），避免"缺腿"观感 */
   halfBody?: boolean
@@ -38,6 +43,10 @@ export const AVATAR_LIBRARY: AvatarDef[] = [
   // V1.5.0 Mark 移除：卡通小孩形象 + 条款禁止改绘成美男，服务端已迁移 mark → chitose）
   { id: 'natori', label: 'Natori', tag: '西装青年', path: 'models/natori/Natori.model3.json', gender: 'm' },
   { id: 'chitose', label: 'Chitose', tag: '温柔青年', path: 'models/chitose/chitose.model3.json', gender: 'm', halfBody: true },
+  // V2.1 QQ秀路线：Jing/Tao 序列帧轻量角色包（帧图由 docs/assets/action-boards 零人工组装，
+  // 见 scripts/build-sprite-packages.mjs；加载走 SpriteAvatar）
+  { id: 'jing', label: 'Jing', tag: '元气少女', path: 'models/jing/manifest.json', gender: 'f', engine: 'sprite-sequence' },
+  { id: 'tao', label: 'Tao', tag: '活力少年', path: 'models/tao/manifest.json', gender: 'm', engine: 'sprite-sequence' },
 ]
 
 /** id → 性别（未知形象按女处理，仅影响色板过滤） */
@@ -64,4 +73,9 @@ export const DEFAULT_AVATAR = 'hiyori'
 /** V2.0 Task 4：按 id 查形象定义（runtime/adapters 合成 legacy manifest 用） */
 export function avatarDef(id: string): AvatarDef | null {
   return AVATAR_LIBRARY.find((a) => a.id === id) ?? null
+}
+
+/** V2.1：形象是否为 sprite-sequence 序列帧角色包（决定舞台用 SpriteAvatar 还是 AvatarSprite） */
+export function isSpriteAvatar(id: string): boolean {
+  return avatarDef(id)?.engine === 'sprite-sequence'
 }
