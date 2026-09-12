@@ -72,13 +72,13 @@ const VIS_LABELS: Record<Visibility, string> = {
 }
 // 互动动作清单（长按菜单顺序）——标签/气泡文案统一在 actions/registry
 const ACTIONS = MENU_ACTIONS
-// 互动 Dock（V1.2 小火人化）
+// 互动 Dock（V1.2 小火人化）——V2.1 移除 feed/flower（产品设计不显示喂食类按钮）
 const DOCK = [
-  { id: 'feed', emoji: '🧁' },
   { id: 'pat', emoji: '🫳' },
   { id: 'poke', emoji: '👉' },
   { id: 'hug', emoji: '🤗' },
-  { id: 'flower', emoji: '💐' },
+  { id: 'heart', emoji: '❤️' },
+  { id: 'wave', emoji: '👋' },
 ]
 // V2.0 Task 6：共同时刻应用层端口（REST 权威推进，非法转移由服务端拒绝）
 const momentPorts = { createMoment: api.createMoment, transitionMoment: api.transitionMoment }
@@ -1348,17 +1348,8 @@ export default function App() {
             </div>
           )}
 
-          {/* 互动 Dock（陪伴 Tab）；桌宠模式下换成迷你坞 */}
-          {tab === 'companion' && !petMode && (
-            <div className="dock">
-              {DOCK.map((d) => (
-                <button key={d.id} className="dock-btn" onClick={() => sendAction(d.id)}>
-                  <span className="dock-emoji">{d.emoji}</span>
-                  <span className="dock-label">{labelOf(d.id)}</span>
-                </button>
-              ))}
-            </div>
-          )}
+          {/* V2.1：常驻互动 Dock 已移除（挡视野）；互动走模型长按菜单（MENU_ACTIONS 全覆盖同清单）
+              + 点击模型 body 仍可触发默认互动 */}
 
           {/* V1.4.3 桌宠模式 UI：迷你互动坞 + 退出按钮（模型拖拽/点按/长按与常驻模式一致） */}
           {petMode && (

@@ -21,6 +21,8 @@ import { AVATAR_HALF_BODY } from './models'
 
 /** 动作帧率（QQ秀级别 8fps 足够顺滑，saver 档零压力） */
 export const SPRITE_ACTION_FPS = 8
+/** 动作循环次数（QQ秀闪动头像机制：2-10帧@4-10fps 循环；5帧动作播2次约1.25s） */
+export const SPRITE_ACTION_LOOPS = 2
 /** 末帧停留时长（ms）：峰值动作多看一眼再回待机 */
 export const SPRITE_HOLD_LAST_MS = 250
 /** idle 呼吸幅度（±scale 比例） */
@@ -61,13 +63,16 @@ export interface StageSprite {
   applyVariant(variantId: string): Promise<boolean>
 }
 
-/** 播放帧下标计算（纯函数，单测用）：返回当前应显示帧号，序列播完且停留结束时返回 -1（回 idle） */
-export function frameIndexAt(elapsedMs: number, frameCount: number, fps = SPRITE_ACTION_FPS, holdLastMs = SPRITE_HOLD_LAST_MS): number {
+/**
+ * 播放帧下标计算（纯函数，单测用）：返回当前应显示帧号，播放结束后返回 -1（回 idle）。
+ * loops>1 时循环播放（QQ秀闪动头像机制：2-10帧@4-10fps 循环），循环结束末帧停留 holdLastMs。
+ */
+export function frameIndexAt(elapsedMs: number, frameCount: number, fps = SPRITE_ACTION_FPS, holdLastMs = SPRITE_HOLD_LAST_MS, loops = SPRITE_ACTION_LOOPS): number {
   if (frameCount <= 0) return -1
   const frameMs = 1000 / fps
-  const idx = Math.floor(elapsedMs / frameMs)
-  if (idx < frameCount) return idx
-  return elapsedMs < (frameCount * 1000) / fps + holdLastMs ? frameCount - 1 : -1
+  const totalMs = frameCount * frameMs * loops
+  if (elapsedMs < totalMs) return Math.floor(elapsedMs / frameMs) % frameCount
+  return elapsedMs < totalMs + holdLastMs ? frameCount - 1 : -1
 }
 
 /** manifest 能力表 → 动作帧 URL 映射（纯函数，单测用）。无 frames 声明的动作不进表 */

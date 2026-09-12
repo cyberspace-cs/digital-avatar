@@ -44,7 +44,8 @@ app.post('/api/identity', (req, res) => {
   // V1.5.0：mark → chitose（Mark 卡通小孩 + 条款禁改绘美男，已整体移除）
   // V2.1 QQ秀路线：jing/tao 序列帧轻量角色包加入初始随机池（加载省一半首屏带宽，
   // 客户端按 manifest.engine=sprite-sequence 自动选 SpriteAvatar 渲染）
-  const INITIAL_AVATARS = ['hiyori', 'haru', 'natori', 'chitose', 'jing', 'tao']
+  // V2.1：Jing/Tao 为默认主角，初始随机池优先抽到（前两位权重更高）
+  const INITIAL_AVATARS = ['jing', 'tao', 'jing', 'tao', 'hiyori', 'haru', 'natori', 'chitose']
   const avatar = INITIAL_AVATARS[Math.floor(Math.random() * INITIAL_AVATARS.length)]
   q.insertUser.run(id, name.trim(), avatar)
   res.json({ user: q.getUser.get(id) })
@@ -110,7 +111,7 @@ app.get('/api/state/:userId', (req, res) => {
   const user = q.getUser.get(req.params.userId)
   res.json({
     state: q.getState.get(req.params.userId) ?? null,
-    avatar: user?.avatar ?? 'hiyori',
+    avatar: user?.avatar ?? 'jing',
     style: user?.style ?? 'default',
     outfit: user?.outfit ?? 'base',
   })

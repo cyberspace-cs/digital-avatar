@@ -49,6 +49,11 @@ const SPEC = [
     heart: 'tao_heart',
   },
 ]
+/** 优先取 clean/（clean-sprite-frames.mjs 产物：真透明背景 + alpha 归一化），缺帧回退原始目录 */
+const srcFrame = (spec, stem, i) => {
+  const cleaned = join(ROOT, 'docs', 'assets', 'action-boards', 'clean', spec.id, `${stem}_${pad2(i)}.png`)
+  return existsSync(cleaned) ? cleaned : join(spec.dir, `${stem}_${pad2(i)}.png`)
+}
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
 const pad2 = (n) => String(n).padStart(2, '0')
@@ -69,7 +74,7 @@ for (const spec of SPEC) {
   ]) {
     const frames = []
     for (let i = 1; i <= FRAMES; i++) {
-      const src = join(spec.dir, `${stem}_${pad2(i)}.png`)
+      const src = srcFrame(spec, stem, i)
       if (!existsSync(src)) {
         problems.push(`${spec.id}: 缺源帧 ${src}`)
         continue
@@ -89,8 +94,8 @@ for (const spec of SPEC) {
     }
   }
 
-  // ---- idle 立绘 = wave_01（自然站姿）----
-  const idleSrc = join(spec.dir, `${spec.wave}_01.png`)
+  // ---- idle 立绘 = wave_01（自然站姿，取清理后版本）----
+  const idleSrc = srcFrame(spec, spec.wave, 1)
   if (!existsSync(idleSrc)) problems.push(`${spec.id}: 缺 idle 源图 ${idleSrc}`)
   else files.set('idle.png', readFileSync(idleSrc))
 

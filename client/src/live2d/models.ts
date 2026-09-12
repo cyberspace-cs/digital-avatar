@@ -36,6 +36,11 @@ export interface AvatarDef {
 }
 
 export const AVATAR_LIBRARY: AvatarDef[] = [
+  // V2.1 QQ秀路线：Jing/Tao 序列帧轻量角色包（默认主角，排在前两位）
+  // 帧图由 docs/assets/action-boards 零人工组装，见 scripts/build-sprite-packages.mjs；加载走 SpriteAvatar
+  { id: 'jing', label: 'Jing', tag: '元气少女', path: 'models/jing/manifest.json', gender: 'f', engine: 'sprite-sequence' },
+  { id: 'tao', label: 'Tao', tag: '活力少年', path: 'models/tao/manifest.json', gender: 'm', engine: 'sprite-sequence' },
+  // 旧模型保留（契约红线：不得删除旧模型）
   // 两女：Hiyori 元气少女 / Haru 文静少女（atlas 取证：连裤袜+芭蕾鞋+女性手势）
   { id: 'hiyori', label: 'Hiyori', tag: '元气少女', path: 'models/hiyori/Hiyori.model3.json', gender: 'f' },
   { id: 'haru', label: 'Haru', tag: '文静少女', path: 'models/haru/Haru.model3.json', gender: 'f' },
@@ -43,10 +48,6 @@ export const AVATAR_LIBRARY: AvatarDef[] = [
   // V1.5.0 Mark 移除：卡通小孩形象 + 条款禁止改绘成美男，服务端已迁移 mark → chitose）
   { id: 'natori', label: 'Natori', tag: '西装青年', path: 'models/natori/Natori.model3.json', gender: 'm' },
   { id: 'chitose', label: 'Chitose', tag: '温柔青年', path: 'models/chitose/chitose.model3.json', gender: 'm', halfBody: true },
-  // V2.1 QQ秀路线：Jing/Tao 序列帧轻量角色包（帧图由 docs/assets/action-boards 零人工组装，
-  // 见 scripts/build-sprite-packages.mjs；加载走 SpriteAvatar）
-  { id: 'jing', label: 'Jing', tag: '元气少女', path: 'models/jing/manifest.json', gender: 'f', engine: 'sprite-sequence' },
-  { id: 'tao', label: 'Tao', tag: '活力少年', path: 'models/tao/manifest.json', gender: 'm', engine: 'sprite-sequence' },
 ]
 
 /** id → 性别（未知形象按女处理，仅影响色板过滤） */
@@ -68,7 +69,7 @@ export const AVATAR_LABELS: Record<string, string> = Object.fromEntries(
   AVATAR_LIBRARY.map((a) => [a.id, `${a.label} · ${a.tag}`]),
 )
 
-export const DEFAULT_AVATAR = 'hiyori'
+export const DEFAULT_AVATAR = 'jing'
 
 /** V2.0 Task 4：按 id 查形象定义（runtime/adapters 合成 legacy manifest 用） */
 export function avatarDef(id: string): AvatarDef | null {

@@ -94,8 +94,8 @@ export const ACTION_BUBBLES: Record<string, string> = {
   'shoulder-lean': '靠靠你 🫂',
 }
 
-/** 互动菜单（Dock/长按菜单共用顺序） */
-export const MENU_ACTIONS = ['poke', 'pat', 'hug', 'heart', 'wave', 'pinch', 'feed', 'flower'] as const
+/** 互动菜单（Dock/长按菜单共用顺序）——V2.1 移除 feed/flower（无独立动作，且产品设计不显示喂食类按钮） */
+export const MENU_ACTIONS = ['poke', 'pat', 'hug', 'heart', 'wave', 'pinch'] as const
 
 export function actionLabel(actionId: string): string {
   return ACTION_LABELS[actionId] ?? actionId
