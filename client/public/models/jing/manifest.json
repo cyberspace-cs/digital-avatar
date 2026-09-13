@@ -80,16 +80,16 @@
   ],
   "thumbnailUrl": "idle.png",
   "files": {
-    "frames/wave/frame_01.png": "06bc29478137bad734a0cdf30b00500651f54d793071c4f892964976620b835c",
-    "frames/wave/frame_02.png": "374c6d9c286d61ea675d0eb1c0ee7e6f63408d9e6928d3ef6ddf979147796b61",
-    "frames/wave/frame_03.png": "c0d35ebcfdca29e0eba6fcf02d6648ed550dd1a8108ae136979323e2c2fd26b3",
-    "frames/wave/frame_04.png": "72ba7a4a1ecc456454d1517fa4ab567884155c78b6b67f18f3ea39a8e1cfc80c",
-    "frames/wave/frame_05.png": "dccc520375dba63510bf3d6f506adbc16126e41339e1e5496a30375a52c0ddac",
-    "frames/heart/frame_01.png": "32d4010143ea287d5517d0d1ba3d99ad1a7849f129162bccb8e734648a939d3d",
-    "frames/heart/frame_02.png": "1ad24d15e4c51ec558b01f6583dc32cb7533a87b53f5321f1aeb64a69321ee3c",
-    "frames/heart/frame_03.png": "313e26c460a621f897cbfca7c9c9b5899bda51460576bd26944b29bb24d868aa",
-    "frames/heart/frame_04.png": "d392e9db9d3aa45e081d5842123fcbce8926ebf406f53af4b1485ecc54f40c2d",
-    "frames/heart/frame_05.png": "112328caa6dbb082b9f16f11fe045338f6d8715d598d917c014a8275facd8a33",
-    "idle.png": "06bc29478137bad734a0cdf30b00500651f54d793071c4f892964976620b835c"
+    "frames/wave/frame_01.png": "3994afc010c0b70befe2cc3e81831eb7bf0da90131e3a322155092e3ae28a5d0",
+    "frames/wave/frame_02.png": "3d25e063e909c23aecdae4925766b2fbe9c98e809052ed91a828863b5bb76150",
+    "frames/wave/frame_03.png": "136f577ae4dd2b12dc2b702eed9f167de1089cf9a425402a5c10eb7ab03d6529",
+    "frames/wave/frame_04.png": "184f692ac874de125c9a92d55b4768ede81f3c136dfa9d654353cddcded39bb8",
+    "frames/wave/frame_05.png": "b23b60106964591eea1cfcea4352902e7618ca87af741f6c369bc8a43def381b",
+    "frames/heart/frame_01.png": "16c4d3f7f38d3d9088a7f64eee8caa78cd8619b53382ee68e336f13cb440685e",
+    "frames/heart/frame_02.png": "af731989bc137b70756a43942930c7062e605b77a12bab4659515f232c306bbc",
+    "frames/heart/frame_03.png": "875916af774c2cca07150dcfb1b1a692020c0704f684bb4533fd5578c18e3114",
+    "frames/heart/frame_04.png": "27cea606285a71313f8a4eebbc3329eb527fcdb56e610e10924029efc159d7c1",
+    "frames/heart/frame_05.png": "ab6de30925e2cfaa0c0997f34ceb2be8b700952c559795c2e71106e551c8d741",
+    "idle.png": "3994afc010c0b70befe2cc3e81831eb7bf0da90131e3a322155092e3ae28a5d0"
   }
 }

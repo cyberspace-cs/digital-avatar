@@ -62,7 +62,7 @@ def remove_bg_white(img, threshold=240):
 
 
 def fix_transparent(img):
-    """已有透明背景的图：修复alpha、清零RGB、羽化"""
+    """已有透明背景的图：修复alpha、边缘腐蚀去白边、去边、羽化、RGB清零"""
     w, h = img.size
     result = img.copy()
     rp = result.load()
@@ -78,15 +78,31 @@ def fix_transparent(img):
             elif a == 0:
                 rp[x, y] = (0, 0, 0, 0)
             elif a < 100 and (r > 30 or g > 30 or b > 30):
-                # 角色内部的半透明缺陷（如白色袜子中间的透明带），恢复为不透明
                 rp[x, y] = (r, g, b, 255)
 
-    # 4. 边缘羽化：alpha通道轻微高斯模糊
+    # 4. 边缘腐蚀（Erosion）：alpha通道最小值滤波，收缩1像素，吃掉残留白边
+    #    MinFilter(size=3) 等价于 3x3 结构元腐蚀
     alpha = result.split()[-1]
-    alpha = alpha.filter(ImageFilter.GaussianBlur(radius=0.8))
+    alpha = alpha.filter(ImageFilter.MinFilter(size=3))
     result.putalpha(alpha)
 
-    # 5. 再次确保完全透明像素RGB为0
+    # 5. 去边（Defringe）：对半透明边缘像素，将RGB向角色内部颜色靠拢
+    #    原理：半透明像素的RGB通常混合了背景白色，按alpha比例向黑色收缩可消除白边
+    rp = result.load()
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = rp[x, y]
+            if 0 < a < 255:
+                # 按alpha比例收缩RGB：a=128时RGB减半，消除白色背景混合
+                factor = a / 255.0
+                rp[x, y] = (int(r * factor), int(g * factor), int(b * factor), a)
+
+    # 6. 轻微羽化：alpha通道小半径高斯模糊，过渡自然（radius=0.4，比之前的0.8小）
+    alpha = result.split()[-1]
+    alpha = alpha.filter(ImageFilter.GaussianBlur(radius=0.4))
+    result.putalpha(alpha)
+
+    # 7. 再次确保完全透明像素RGB为0
     rp = result.load()
     for y in range(h):
         for x in range(w):

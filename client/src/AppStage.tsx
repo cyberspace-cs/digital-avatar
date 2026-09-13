@@ -277,6 +277,9 @@ export default function App() {
   // ---------- 初始化 Pixi 舞台 ----------
   useEffect(() => {
     if (!canvasHost.current || appRef.current) return
+    // V2.1渲染质量修复：roundPixels 对齐像素网格，避免亚像素渲染导致的边缘模糊和白边
+    // PIXI v6 通过全局 settings 设置（Application/Renderer options 不接受此属性）
+    PIXI.settings.ROUND_PIXELS = true
     const app = new PIXI.Application({
       resizeTo: window,
       backgroundAlpha: 0,

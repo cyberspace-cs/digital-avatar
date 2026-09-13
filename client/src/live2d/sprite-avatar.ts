@@ -96,11 +96,18 @@ interface FrameClip {
 /**
  * 纹理加载（pixi 6 无 PIXI.Assets）：Image 解码后包装 BaseTexture。
  * 同一 URL 的 Image 会命中浏览器缓存，帧序列重复拉取零开销。
+ * V2.1 渲染质量修复：设置 NEAREST 过滤避免透明PNG边缘白边（LINEAR双线性插值会把
+ * 半透明白色边缘像素与透明区域混合产生白边）。
  */
 function loadTexture(url: string): Promise<PIXI.Texture> {
   return new Promise((resolve, reject) => {
     const img = new Image()
-    img.onload = () => resolve(new PIXI.Texture(new PIXI.BaseTexture(img)))
+    img.onload = () => {
+      const baseTex = new PIXI.BaseTexture(img)
+      // NEAREST 过滤：消除透明PNG缩放时的边缘白边
+      baseTex.scaleMode = PIXI.SCALE_MODES.NEAREST
+      resolve(new PIXI.Texture(baseTex))
+    }
     img.onerror = () => reject(new Error(`纹理加载失败: ${url}`))
     img.src = url
   })
