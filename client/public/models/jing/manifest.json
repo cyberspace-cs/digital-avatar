@@ -1,9 +1,14 @@
 {
   "avatarId": "jing",
   "name": "Jing",
-  "engine": "sprite-sequence",
-  "version": "1.0.0",
+  "engine": "hybrid",
+  "version": "2.0.0",
   "model3Url": "idle.png",
+  "live2d": {
+    "model": "live2d/Hiyori.model3.json",
+    "idleMotion": "Idle",
+    "hasNativeActions": false
+  },
   "placeholder": false,
   "anchors": {
     "head": {

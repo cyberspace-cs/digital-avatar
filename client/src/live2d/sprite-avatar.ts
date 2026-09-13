@@ -149,8 +149,9 @@ export class SpriteAvatar implements StageSprite {
     const res = await fetch(url)
     if (!res.ok) throw new Error(`sprite manifest 拉取失败 ${res.status}: ${url}`)
     const manifest = parseAvatarManifest(await res.json())
-    if (manifest.engine !== 'sprite-sequence') {
-      throw new Error(`engine 不是 sprite-sequence: ${manifest.engine}（${url}）`)
+    // V2.2：hybrid 引擎的序列帧子系统也走这个加载路径（idle 兜底+动作播放）
+    if (manifest.engine !== 'sprite-sequence' && manifest.engine !== 'hybrid') {
+      throw new Error(`engine 不是 sprite-sequence/hybrid: ${manifest.engine}（${url}）`)
     }
     const idleUrl = url.replace(/[^/]*$/, '') + manifest.model3Url
     const tex = await loadTexture(idleUrl)

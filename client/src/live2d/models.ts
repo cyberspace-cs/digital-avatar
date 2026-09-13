@@ -26,20 +26,22 @@ export interface AvatarDef {
   /** 性别（V1.5.0）：衣橱色板按此过滤（男模显示男色板，女模显示女色板） */
   gender: 'm' | 'f'
   /**
-   * 渲染形态（V2.1 QQ秀路线）：'sprite-sequence' = PNG 序列帧轻量角色包
-   * （path 指向 manifest.json，SpriteAvatar 加载）；缺省 = legacy-pixi（Cubism model3）
+   * 渲染形态（V2.2 混合路线）：
+   *   'hybrid' = Live2D idle + 序列帧动作（Jing/Tao）
+   *   'sprite-sequence' = PNG 序列帧轻量角色包（保留兼容）
+   *   缺省 = legacy-pixi（Cubism model3，旧四模型）
    */
-  engine?: 'sprite-sequence'
+  engine?: 'sprite-sequence' | 'hybrid'
   /** 半身像模型：官方 moc 无腿部部件（如 chitose 只有「体」无「下半身」），
    * 按"胸像立绘"构图渲染（放大 + 截断边压出屏幕），避免"缺腿"观感 */
   halfBody?: boolean
 }
 
 export const AVATAR_LIBRARY: AvatarDef[] = [
-  // V2.1 QQ秀路线：Jing/Tao 序列帧轻量角色包（默认主角，排在前两位）
-  // 帧图由 docs/assets/action-boards 零人工组装，见 scripts/build-sprite-packages.mjs；加载走 SpriteAvatar
-  { id: 'jing', label: 'Jing', tag: '元气少女', path: 'models/jing/manifest.json', gender: 'f', engine: 'sprite-sequence' },
-  { id: 'tao', label: 'Tao', tag: '活力少年', path: 'models/tao/manifest.json', gender: 'm', engine: 'sprite-sequence' },
+  // V2.2 混合路线：Jing/Tao = Live2D idle + 序列帧动作（默认主角，排在前两位）
+  // 帧图由 docs/assets/action-boards 零人工组装；Live2D 占位用 hiyori，后续替换为真正模型
+  { id: 'jing', label: 'Jing', tag: '元气少女', path: 'models/jing/manifest.json', gender: 'f', engine: 'hybrid' },
+  { id: 'tao', label: 'Tao', tag: '活力少年', path: 'models/tao/manifest.json', gender: 'm', engine: 'hybrid' },
   // 旧模型保留（契约红线：不得删除旧模型）
   // 两女：Hiyori 元气少女 / Haru 文静少女（atlas 取证：连裤袜+芭蕾鞋+女性手势）
   { id: 'hiyori', label: 'Hiyori', tag: '元气少女', path: 'models/hiyori/Hiyori.model3.json', gender: 'f' },
@@ -79,4 +81,9 @@ export function avatarDef(id: string): AvatarDef | null {
 /** V2.1：形象是否为 sprite-sequence 序列帧角色包（决定舞台用 SpriteAvatar 还是 AvatarSprite） */
 export function isSpriteAvatar(id: string): boolean {
   return avatarDef(id)?.engine === 'sprite-sequence'
+}
+
+/** V2.2：形象是否为 hybrid 混合角色包（Live2D idle + 序列帧动作） */
+export function isHybridAvatar(id: string): boolean {
+  return avatarDef(id)?.engine === 'hybrid'
 }

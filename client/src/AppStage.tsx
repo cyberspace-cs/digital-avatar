@@ -4,9 +4,11 @@ import './pixi-setup'
 import { AvatarSprite, OUTFIT_STYLES, OUTFIT_VARIANTS } from './live2d/avatar'
 // V2.1 QQ秀路线：Jing/Tao 序列帧轻量形象（与 AvatarSprite 同舞台公共面，可互换）
 import { SpriteAvatar } from './live2d/sprite-avatar'
+// V2.2 混合路线：Live2D idle + 序列帧动作
+import { HybridAvatar } from './live2d/hybrid-avatar'
 import type { StageSprite } from './live2d/sprite-avatar'
 import { COUPLE_THEMES, COUPLE_THEME_ORDER, matchCoupleTheme } from './live2d/couple'
-import { AVATAR_LIBRARY, AVATAR_LABELS, AVATAR_GENDER, AVATAR_HALF_BODY, MODEL_URLS, DEFAULT_AVATAR, isSpriteAvatar } from './live2d/models'
+import { AVATAR_LIBRARY, AVATAR_LABELS, AVATAR_GENDER, AVATAR_HALF_BODY, MODEL_URLS, DEFAULT_AVATAR, isSpriteAvatar, isHybridAvatar } from './live2d/models'
 import { PerfGovernor } from './live2d/perf'
 import type { QualityTier } from './live2d/perf'
 import { api } from './api'
@@ -38,14 +40,23 @@ const homeYFor = (avatarKey: string, h: number) =>
 const AVATAR_EMOJI: Record<string, string> = { hiyori: '🌸', haru: '📚', natori: '🌙', chitose: '🧥', jing: '🎀', tao: '⚡' }
 
 /**
- * V2.1：按形象引擎确保舞台实例类型（AvatarSprite ⇄ SpriteAvatar 可互换）。
+ * V2.2：按形象引擎确保舞台实例类型（AvatarSprite ⇄ SpriteAvatar ⇄ HybridAvatar 可互换）。
  * 引擎切换时重建实例并迁移 home/style/variant/mood，旧实例销毁。
  * 模块级纯逻辑（不依赖组件状态），mount effect 与 swap 路径共用。
  */
 const ensureSpriteClass = (key: string, cur: StageSprite): StageSprite => {
+  const wantHybrid = isHybridAvatar(key)
   const wantSprite = isSpriteAvatar(key)
-  if (wantSprite === (cur instanceof SpriteAvatar)) return cur
-  const next: StageSprite = wantSprite ? new SpriteAvatar() : new AvatarSprite()
+  // 类型匹配则复用
+  if (wantHybrid && cur instanceof HybridAvatar) return cur
+  if (wantSprite && cur instanceof SpriteAvatar) return cur
+  if (!wantHybrid && !wantSprite && cur instanceof AvatarSprite) return cur
+  // 不匹配则重建
+  const next: StageSprite = wantHybrid
+    ? new HybridAvatar()
+    : wantSprite
+      ? new SpriteAvatar()
+      : new AvatarSprite()
   next.home = { ...cur.home }
   next.target = { ...cur.target }
   next.style = cur.style
@@ -300,10 +311,12 @@ export default function App() {
     const tier = governor.current
     governorRef.current = governor
 
-    // V2.1：初始形象是序列帧角色包（jing/tao）时用 SpriteAvatar，否则旧管线 AvatarSprite
-    let meS: StageSprite = isSpriteAvatar(meAvatarRef.current ?? DEFAULT_AVATAR)
-      ? new SpriteAvatar()
-      : new AvatarSprite()
+    // V2.2：初始形象按引擎选择实例——hybrid(Jing/Tao) / sprite-sequence / legacy-pixi
+    const meAvatarId = meAvatarRef.current ?? DEFAULT_AVATAR
+    let meS: StageSprite
+    if (isHybridAvatar(meAvatarId)) meS = new HybridAvatar()
+    else if (isSpriteAvatar(meAvatarId)) meS = new SpriteAvatar()
+    else meS = new AvatarSprite()
     let partnerS: StageSprite = new AvatarSprite()
     meSprite.current = meS
     partnerSprite.current = partnerS
@@ -592,9 +605,11 @@ export default function App() {
   // ---------- 发送互动（V2.0 Task 3 重构） ----------
   // 动作语义与降级链在 actions/registry：旧模型能力表下 feed/flower 降级为 wave（与
   // V1.2 行为一致），未知动作落通用反应（idle+表情），动画失败不阻断事件发送
-  /** 能力表按形象形态取：序列帧角色包用真实 manifest 声明，旧模型用合成 legacy 表 */
-  const capsFor = (sprite: StageSprite | null) =>
-    sprite instanceof SpriteAvatar && sprite.manifest ? sprite.manifest.capabilities : legacyCapabilities()
+  /** 能力表按形象形态取：序列帧/混合角色包用真实 manifest 声明，旧模型用合成 legacy 表 */
+  const capsFor = (sprite: StageSprite | null) => {
+    const manifest = (sprite as SpriteAvatar | HybridAvatar | null)?.manifest
+    return manifest ? manifest.capabilities : legacyCapabilities()
+  }
 
   const playPlanLocal = (sprite: StageSprite | null, plan: ActionPlan) => {
     if (plan.level === 'exact' || plan.level === 'semantic') {
@@ -620,10 +635,9 @@ export default function App() {
  *  V2.1：序列帧形象（SpriteAvatar）用真实 manifest 能力表；旧模型用合成 legacy manifest。 */
   const adapterFor = (sprite: StageSprite | null, avatarKey: string | null): LegacyPixiAdapter | null => {
     if (!sprite?.model) return null
-    const manifest =
-      sprite instanceof SpriteAvatar && sprite.manifest
-        ? sprite.manifest
-        : legacyManifest(avatarKey ?? DEFAULT_AVATAR) ?? legacyManifest(DEFAULT_AVATAR)
+    const manifest = (sprite as SpriteAvatar | HybridAvatar | null)?.manifest
+      ?? legacyManifest(avatarKey ?? DEFAULT_AVATAR)
+      ?? legacyManifest(DEFAULT_AVATAR)
     return manifest ? new LegacyPixiAdapter(sprite, manifest) : null
   }
 

@@ -17,9 +17,19 @@ export const ANCHOR_NAMES = [
 ] as const
 export type AnchorName = (typeof ANCHOR_NAMES)[number]
 
-/** 渲染引擎：Jing/Tao(V2.1 QQ秀路线)走 sprite-sequence，旧四模型走 legacy-pixi，cubism5 保留给未来正式 Live2D 包 */
-export const RENDER_ENGINES = ['cubism5', 'legacy-pixi', 'sprite-sequence'] as const
+/** 渲染引擎：Jing/Tao(V2.2 混合路线)走 hybrid(Live2D idle+序列帧动作)，V2.1 sprite-sequence 保留，旧四模型走 legacy-pixi，cubism5 保留给未来正式 Live2D 包 */
+export const RENDER_ENGINES = ['cubism5', 'legacy-pixi', 'sprite-sequence', 'hybrid'] as const
 export type RenderEngine = (typeof RENDER_ENGINES)[number]
+
+/** hybrid 引擎的 Live2D 子资产配置（idle 用 Live2D，动作用序列帧） */
+export interface HybridLive2DConfig {
+  /** .model3.json 相对 manifest 所在目录的路径 */
+  model: string
+  /** idle 动作组名（Cubism motion group，通常为 'Idle'） */
+  idleMotion: string
+  /** true=动作也走 Live2D 原生 motion；false=动作用序列帧（当前阶段） */
+  hasNativeActions: boolean
+}
 
 /** 纹理档位（契约要求 4096/2048/1024 三档） */
 export const TEXTURE_TIERS = ['4096', '2048', '1024'] as const
@@ -64,6 +74,8 @@ export interface AvatarManifest {
   capabilities: ActionCapability[]
   textures?: Partial<Record<TextureTier, string>>
   thumbnailUrl?: string
+  /** hybrid 引擎专用：Live2D 子资产配置（engine='hybrid' 时必填） */
+  live2d?: HybridLive2DConfig
   /** 文件相对路径 → sha256（资产校验器使用） */
   files?: Record<string, string>
 }
@@ -185,6 +197,23 @@ export function parseAvatarManifest(input: unknown): AvatarManifest {
 
   if (input.files !== undefined && !isRecord(input.files)) issues.push('files 必须是 {路径: sha256} 对象')
 
+  // hybrid 引擎必须声明 live2d 配置
+  if (input.engine === 'hybrid') {
+    if (!isRecord(input.live2d)) {
+      issues.push('engine=hybrid 时必须提供 live2d 配置对象')
+    } else {
+      if (typeof input.live2d.model !== 'string' || input.live2d.model.length === 0) {
+        issues.push('live2d.model 必须是非空路径')
+      }
+      if (typeof input.live2d.idleMotion !== 'string' || input.live2d.idleMotion.length === 0) {
+        issues.push('live2d.idleMotion 必须是非空字符串')
+      }
+      if (typeof input.live2d.hasNativeActions !== 'boolean') {
+        issues.push('live2d.hasNativeActions 必须是 boolean')
+      }
+    }
+  }
+
   if (issues.length > 0) throw new SchemaError(issues)
 
   return {
@@ -197,6 +226,7 @@ export function parseAvatarManifest(input: unknown): AvatarManifest {
     capabilities: input.capabilities as ActionCapability[],
     textures: input.textures as AvatarManifest['textures'],
     thumbnailUrl: input.thumbnailUrl as string | undefined,
+    live2d: input.live2d as HybridLive2DConfig | undefined,
     files: input.files as Record<string, string> | undefined,
   }
 }

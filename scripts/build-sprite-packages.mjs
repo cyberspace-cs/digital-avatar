@@ -102,13 +102,20 @@ for (const spec of SPEC) {
   if (problems.length > 0) continue
 
   // ---- manifest ----
+  // V2.2：如果输出目录已存在 manifest 且含 live2d 配置，保留 hybrid 引擎设置（不覆盖）
+  const existingManifestPath = join(outDir, 'manifest.json')
+  const existingManifest = existsSync(existingManifestPath)
+    ? JSON.parse(readFileSync(existingManifestPath, 'utf8'))
+    : null
+  const isHybrid = existingManifest?.engine === 'hybrid' && existingManifest?.live2d
   const manifest = {
     avatarId: spec.id,
     name: spec.name,
-    engine: 'sprite-sequence',
-    version: '1.0.0',
+    engine: isHybrid ? 'hybrid' : 'sprite-sequence',
+    version: isHybrid ? '2.0.0' : '1.0.0',
     // QQ秀式待机：基准立绘路径（契约 model3Url 字段复用为"主视觉资源路径"）
     model3Url: 'idle.png',
+    ...(isHybrid ? { live2d: existingManifest.live2d } : {}),
     placeholder: false,
     anchors: ANCHORS,
     capabilities: [{ actionId: 'idle', motion: 'idle.png' }, ...clips],
