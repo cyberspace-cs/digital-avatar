@@ -25,20 +25,9 @@ export const SPRITE_ACTION_FPS = 8
 export const SPRITE_ACTION_LOOPS = 2
 /** 末帧停留时长（ms）：峰值动作多看一眼再回待机 */
 export const SPRITE_HOLD_LAST_MS = 250
-/** idle 呼吸幅度（±scale 比例） */
-const BREATHE_AMP = 0.012
-const BREATHE_PERIOD_MS = 3000
-/** idle 轻微摇摆幅度（弧度，±0.5°） */
-const SWAY_AMP = 0.008
-const SWAY_PERIOD_MS = 5000
-/** 眨眼间隔范围（ms） */
-const BLINK_MIN_MS = 3000
-const BLINK_MAX_MS = 6000
-/** 眨眼持续时间（ms） */
-const BLINK_DURATION_MS = 150
-/** 自然晃动幅度（像素） */
-const IDLE_DRIFT_AMP = 1.5
-const IDLE_DRIFT_PERIOD_MS = 7000
+/** idle 呼吸幅度（±scale 比例）。V2.2 收敛：幅度克制，避免脚底/身体比例明显变化 */
+const BREATHE_AMP = 0.006
+const BREATHE_PERIOD_MS = 4000
 
 /**
  * 舞台形象公共面：AppStage 对 meS/partnerS 的全部依赖（AvatarSprite 与 SpriteAvatar
@@ -146,13 +135,6 @@ export class SpriteAvatar implements StageSprite {
   private _bounce = 0
   private _lastTs = 0
   private _loadSeq = 0
-  /** V2.2 伪Live2D微动效：眨眼状态 */
-  private _blinkNextAt = 0
-  private _blinkStartAt = 0
-  /** V2.2 伪Live2D微动效：摇摆相位 */
-  private _swayPhase = 0
-  /** V2.2 伪Live2D微动效：自然晃动相位 */
-  private _driftPhase = 0
 
   get x() {
     return this.model?.x ?? 0
@@ -323,55 +305,24 @@ export class SpriteAvatar implements StageSprite {
         frameSprite.texture = clip.textures[idx]!
       }
     }
-    // idle 微动效（播放动作时暂停避免叠加抖动）
-    // V2.2 伪Live2D：呼吸 + 轻微摇摆 + 随机眨眼 + 自然晃动，提升序列帧灵动感
+    // idle 呼吸（播放动作时暂停避免叠加抖动）
+    // V2.2 收敛：仅保留克制的呼吸微动，移除整图眨眼/摇摆/晃动（会压扁身体、移动脚底）
     if (!this._playing) {
       this._phase = (this._phase + dt) % BREATHE_PERIOD_MS
       const breathe = Math.sin((this._phase / BREATHE_PERIOD_MS) * Math.PI * 2)
-
-      // 轻微摇摆（±0.5°，周期5秒）
-      this._swayPhase = (this._swayPhase + dt) % SWAY_PERIOD_MS
-      const sway = Math.sin((this._swayPhase / SWAY_PERIOD_MS) * Math.PI * 2) * SWAY_AMP
-      frameSprite.rotation = sway
-
-      // 自然晃动（±1.5px，周期7秒，两个方向不同相位）
-      this._driftPhase = (this._driftPhase + dt) % IDLE_DRIFT_PERIOD_MS
-      const driftX = Math.sin((this._driftPhase / IDLE_DRIFT_PERIOD_MS) * Math.PI * 2) * IDLE_DRIFT_AMP
-      const driftY = Math.cos((this._driftPhase / IDLE_DRIFT_PERIOD_MS) * Math.PI * 2) * IDLE_DRIFT_AMP * 0.6
-      frameSprite.x = driftX
-      frameSprite.y = driftY
-
-      // 随机眨眼（每隔3-6秒一次，持续150ms，scale.y 缩小到0.1再恢复）
-      if (this._blinkNextAt === 0) {
-        this._blinkNextAt = now + BLINK_MIN_MS + Math.random() * (BLINK_MAX_MS - BLINK_MIN_MS)
-      }
-      let blinkScale = 1
-      if (now >= this._blinkNextAt) {
-        if (this._blinkStartAt === 0) this._blinkStartAt = now
-        const blinkElapsed = now - this._blinkStartAt
-        if (blinkElapsed < BLINK_DURATION_MS) {
-          // 眨眼：先快速闭眼再睁开（正弦曲线）
-          blinkScale = 1 - Math.sin((blinkElapsed / BLINK_DURATION_MS) * Math.PI) * 0.9
-        } else {
-          // 眨眼结束，安排下一次
-          this._blinkStartAt = 0
-          this._blinkNextAt = now + BLINK_MIN_MS + Math.random() * (BLINK_MAX_MS - BLINK_MIN_MS)
-        }
-      }
-
       // 开心弹跳：指数衰减的 scale 脉冲，叠加在呼吸上
       let bounce = 0
       if (this._bounce > 0.01) {
         bounce = Math.sin(this._bounce * Math.PI) * 0.05
         this._bounce = Math.max(0, this._bounce - dt / 450)
       }
-
-      frameSprite.scale.set(
-        1 - BREATHE_AMP * breathe,
-        (1 + BREATHE_AMP * breathe + bounce) * blinkScale,
-      )
+      frameSprite.scale.set(1 - BREATHE_AMP * breathe, 1 + BREATHE_AMP * breathe + bounce)
+      frameSprite.rotation = 0
+      frameSprite.x = 0
+      frameSprite.y = 0
     } else {
-      // 播放动作时重置微动效位置
+      // 播放动作时完全复位变换状态，避免继承 idle 的压缩/偏移
+      frameSprite.scale.set(1, 1)
       frameSprite.rotation = 0
       frameSprite.x = 0
       frameSprite.y = 0

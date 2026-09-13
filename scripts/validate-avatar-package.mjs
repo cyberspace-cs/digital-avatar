@@ -86,7 +86,8 @@ export function validateAvatarPackage(pkgPath) {
   // ---- 必需运行时文件 ----
   // V2.1 sprite-sequence（QQ秀路线）：model3Url 复用为主视觉资源路径（idle.png），
   // 无 moc3/physics/pose/cdi、无 expressions/motions 目录、无纹理三档——跳过 Cubism 专属校验
-  const isSprite = manifest?.engine === 'sprite-sequence'
+  // V2.2 hybrid：序列帧部分同 sprite-sequence；live2d 子资产单独校验（见下方）
+  const isSprite = manifest?.engine === 'sprite-sequence' || manifest?.engine === 'hybrid'
   const requiredFiles = [] // [checkName, relPath]
   let model3Rel = manifest ? posix(manifest.model3Url).replace(/^\//, '') : null
   if (manifest) {

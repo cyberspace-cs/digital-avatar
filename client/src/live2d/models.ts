@@ -38,10 +38,10 @@ export interface AvatarDef {
 }
 
 export const AVATAR_LIBRARY: AvatarDef[] = [
-  // V2.2 混合路线：Jing/Tao = Live2D idle + 序列帧动作（默认主角，排在前两位）
-  // 帧图由 docs/assets/action-boards 零人工组装；Live2D 占位用 hiyori，后续替换为真正模型
-  { id: 'jing', label: 'Jing', tag: '元气少女', path: 'models/jing/manifest.json', gender: 'f', engine: 'hybrid' },
-  { id: 'tao', label: 'Tao', tag: '活力少年', path: 'models/tao/manifest.json', gender: 'm', engine: 'hybrid' },
+  // V2.2：Jing/Tao 暂用 sprite-sequence（真正 Live2D 模型完成前不用占位模型冒充主角）
+  // 帧图由 docs/assets/action-boards 零人工组装；HybridAvatar 代码已就绪，模型就绪后改 engine='hybrid'
+  { id: 'jing', label: 'Jing', tag: '元气少女', path: 'models/jing/manifest.json', gender: 'f', engine: 'sprite-sequence' },
+  { id: 'tao', label: 'Tao', tag: '活力少年', path: 'models/tao/manifest.json', gender: 'm', engine: 'sprite-sequence' },
   // 旧模型保留（契约红线：不得删除旧模型）
   // 两女：Hiyori 元气少女 / Haru 文静少女（atlas 取证：连裤袜+芭蕾鞋+女性手势）
   { id: 'hiyori', label: 'Hiyori', tag: '元气少女', path: 'models/hiyori/Hiyori.model3.json', gender: 'f' },
